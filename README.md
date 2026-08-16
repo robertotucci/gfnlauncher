@@ -6,6 +6,10 @@ Reference points are the PS5 dashboard and Steam Big Picture, not a web app scal
 
 Linux only.
 
+![The catalogue grid: a hero band showing the focused title above a strip of genre filters and a grid of cover art, with the focused tile carrying the only cursor on screen](docs/screenshots/grid.png)
+
+The whole GeForce NOW catalogue — 5 889 titles the day this was taken. The ring around one cover is the cursor, and the strip above it is every genre with its count. More views in [docs/screenshots](docs/screenshots).
+
 ## Requirements
 
 - The official **GeForce NOW Flatpak**, `com.nvidia.geforcenow`
