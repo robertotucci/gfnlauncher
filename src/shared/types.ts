@@ -126,6 +126,16 @@ export interface GfnClientInfo {
   version: string | null
   /** Host-side Flatpak install root, or null when not installed. */
   installPath: string | null
+  /**
+   * Why the probe could not answer, when that is not simply "no client here".
+   *
+   * Null in the ordinary cases — installed, or genuinely absent. It is set only
+   * when the launcher was *prevented* from looking: packaged as a Flatpak
+   * without permission to reach the host, every `flatpak` call fails, and
+   * rendering that as "GeForce NOW is not installed" is a sentence that sends
+   * the user to reinstall a client that was there all along.
+   */
+  error: string | null
 }
 
 export interface LaunchRequest {

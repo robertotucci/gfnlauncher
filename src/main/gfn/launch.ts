@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process'
 import type { LaunchRequest, LaunchResult } from '@shared/types'
+import { hostSpawn } from '../host'
 import { GFN_APP_ID, GFN_CEF_BINARY, GFN_CEF_DIR, isGfnRunning, killGfn } from './flatpak'
 
 /**
@@ -111,20 +111,24 @@ function delay(ms: number): Promise<void> {
 }
 
 function spawnFlatpak(argv: string[], mode: 'native'): Promise<LaunchResult> {
-  const command = `flatpak ${argv.join(' ')}`
-
   return new Promise<LaunchResult>((resolve) => {
-    // Detached: GFN must outlive the launcher, and the launcher must not block
-    // on a session that can run for hours.
-    const child = spawn('flatpak', argv, { detached: true, stdio: 'ignore' })
+    // `hostSpawn` is what makes this work from inside a Flatpak, where `flatpak`
+    // is not on the sandbox's PATH. `buildLaunchArgv` stays innocent of that:
+    // the argv it produces is the one the *host* runs either way, and prefixing
+    // it is the one job this function has that the pure builder should not.
+    //
+    // `printable` carries the prefix, though. It is what LaunchNotice puts on
+    // screen, and a command the reader cannot paste back is worth less than one
+    // they can.
+    const { child, printable } = hostSpawn('flatpak', argv)
 
     child.once('error', (err) => {
-      resolve({ ok: false, command, error: err.message, mode })
+      resolve({ ok: false, command: printable, error: err.message, mode })
     })
 
     child.once('spawn', () => {
       child.unref()
-      resolve({ ok: true, command, error: null, mode })
+      resolve({ ok: true, command: printable, error: null, mode })
     })
   })
 }

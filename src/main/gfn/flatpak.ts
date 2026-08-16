@@ -1,8 +1,5 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { GfnClientInfo } from '@shared/types'
-
-const run = promisify(execFile)
+import { classifyHostFailure, hostExecFile } from '../host'
 
 /** Flatpak application id of the official NVIDIA GeForce NOW Linux client. */
 export const GFN_APP_ID = 'com.nvidia.geforcenow'
@@ -51,7 +48,7 @@ export function parseRunningApps(psOutput: string): string[] {
  */
 export async function isGfnRunning(): Promise<boolean> {
   try {
-    const { stdout } = await run('flatpak', ['ps', '--columns=application'])
+    const { stdout } = await hostExecFile('flatpak', ['ps', '--columns=application'])
     return parseRunningApps(stdout).includes(GFN_APP_ID)
   } catch {
     // Treat an unreadable process list as "nothing running": the launch that
@@ -69,7 +66,7 @@ export async function isGfnRunning(): Promise<boolean> {
  */
 export async function killGfn(): Promise<void> {
   try {
-    await run('flatpak', ['kill', GFN_APP_ID])
+    await hostExecFile('flatpak', ['kill', GFN_APP_ID])
   } catch {
     // Already gone, or not ours to kill. The spawn that follows is the thing
     // that actually has to work, and it reports for itself.
@@ -86,27 +83,37 @@ export async function detectGfn(force = false): Promise<GfnClientInfo> {
 }
 
 async function probeGfn(): Promise<GfnClientInfo> {
-  const absent: GfnClientInfo = { installed: false, version: null, installPath: null }
-
   let installPath: string | null = null
   try {
-    const { stdout } = await run('flatpak', ['info', '--show-location', GFN_APP_ID])
+    const { stdout } = await hostExecFile('flatpak', ['info', '--show-location', GFN_APP_ID])
     installPath = stdout.trim() || null
-  } catch {
-    // Either flatpak is missing from PATH or the app is not installed. Both
-    // mean the same thing to the launcher.
-    return absent
+  } catch (error) {
+    // Three different things reach here and only one of them is "not installed".
+    // Packaged as a Flatpak we may simply not be allowed to ask, and reporting
+    // that as an absent client would send the user to reinstall something that
+    // was there all along — so the reason travels with the answer and the
+    // Settings screen says which it was.
+    const failure = classifyHostFailure(error)
+    return {
+      installed: false,
+      version: null,
+      installPath: null,
+      error: failure.kind === 'blocked' ? failure.message : null
+    }
   }
 
   let version: string | null = null
   try {
-    const { stdout } = await run('flatpak', ['info', GFN_APP_ID], {
-      env: { ...process.env, LANG: 'C', LC_ALL: 'C' }
+    // Passed through `hostCommand` as `--env=` rather than set on our own
+    // process: flatpak-spawn does not forward the sandbox's environment, so a
+    // plain env option would silently reach nothing once packaged.
+    const { stdout } = await hostExecFile('flatpak', ['info', GFN_APP_ID], {
+      env: { LANG: 'C', LC_ALL: 'C' }
     })
     version = parseVersion(stdout)
   } catch {
     // A detected install with an unreadable version is still usable.
   }
 
-  return { installed: true, version, installPath }
+  return { installed: true, version, installPath, error: null }
 }

@@ -301,11 +301,13 @@ function LaunchModeRow({
   scope,
   value,
   gfnInstalled,
+  gfnProbeError,
   onSelect
 }: {
   scope: string
   value: LaunchMode
   gfnInstalled: boolean
+  gfnProbeError: string | null
   onSelect: (mode: LaunchMode) => void
 }): ReactNode {
   const active = LAUNCH_MODE_CHOICES.find((choice) => choice.id === value)
@@ -315,7 +317,11 @@ function LaunchModeRow({
       <p className="text-sm font-medium">How games start</p>
       <p className="text-muted-foreground mt-1 text-xs">
         {active?.hint}
-        {value === 'native' && !gfnInstalled && ' The Flatpak is not installed, so this will fail.'}
+        {value === 'native' &&
+          !gfnInstalled &&
+          (gfnProbeError
+            ? ' The sandbox cannot reach the client, so this will fail.'
+            : ' The Flatpak is not installed, so this will fail.')}
       </p>
 
       <div className="mt-3 flex items-center gap-2">
@@ -353,6 +359,7 @@ export function SettingsScreen({
   scope,
   gfnInstalled,
   gfnVersion,
+  gfnProbeError,
   gfnOpenError,
   refreshing,
   syncing,
@@ -373,6 +380,13 @@ export function SettingsScreen({
   scope: string
   gfnInstalled: boolean
   gfnVersion: string | null
+  /**
+   * Set only when the launcher was *stopped* from looking for the client rather
+   * than finding none — a sandboxed build with the host permission revoked. It
+   * is the difference between "GeForce NOW is not installed" and "I was not
+   * allowed to check", and only one of those is something the user can act on.
+   */
+  gfnProbeError: string | null
   gfnOpenError: string | null
   refreshing: boolean
   syncing: boolean
@@ -521,6 +535,7 @@ export function SettingsScreen({
             scope={scope}
             value={settings.launchMode ?? 'native'}
             gfnInstalled={gfnInstalled}
+            gfnProbeError={gfnProbeError}
             onSelect={(launchMode) => onUpdate({ launchMode })}
           />
         </Section>
@@ -552,7 +567,12 @@ export function SettingsScreen({
             description={
               gfnInstalled
                 ? 'For the settings this launcher does not mirror — stream quality, connected accounts, controller mapping. They apply to the sessions started from here. The launcher steps aside, and coming back needs a mouse or keyboard.'
-                : 'The com.nvidia.geforcenow Flatpak is not installed, so there is nothing to open.'
+                : gfnProbeError
+                  ? // Not "it is not installed": we never got to look. Saying the
+                    // former would send the user to reinstall a client that is
+                    // sitting right there.
+                    'The client could not be reached from inside the Flatpak sandbox, so it cannot be opened from here.'
+                  : 'The com.nvidia.geforcenow Flatpak is not installed, so there is nothing to open.'
             }
             icon={ExternalLink}
             disabled={!gfnInstalled}
@@ -561,10 +581,14 @@ export function SettingsScreen({
 
           {gfnOpenError && <p className="text-destructive px-4 pb-2 text-xs">{gfnOpenError}</p>}
 
+          {gfnProbeError && <p className="text-destructive px-4 pb-2 text-xs">{gfnProbeError}</p>}
+
           <p className="text-muted-foreground px-4 pt-1 pb-2 font-mono text-xs">
             {gfnVersion
               ? `com.nvidia.geforcenow · v${gfnVersion}`
-              : 'GeForce NOW Flatpak not detected'}
+              : gfnProbeError
+                ? 'GeForce NOW Flatpak not readable'
+                : 'GeForce NOW Flatpak not detected'}
           </p>
         </Section>
       </div>

@@ -1,8 +1,5 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { PowerAction, PowerResult } from '@shared/types'
-
-const run = promisify(execFile)
+import { classifyHostFailure, hostCommand, hostExecFile, printableCommand } from './host'
 
 /**
  * Ending the session from the sofa.
@@ -18,6 +15,12 @@ const run = promisify(execFile)
  * refusal comes back as an error the dialog can show rather than a silent
  * no-op — which on a screen with no keyboard is the only failure mode that
  * would be genuinely mystifying.
+ *
+ * Packaged as a Flatpak there is no `systemctl` in the sandbox at all, so the
+ * call goes out through `host.ts`. That changes where the command runs and
+ * nothing about what it is: `buildPowerArgv` still produces the same two words,
+ * and is still pure so the suite can assert them without suspending the machine
+ * running it.
  */
 
 /** The actions the bridge accepts, for validating whatever the renderer sends. */
@@ -37,19 +40,20 @@ export function buildPowerArgv(action: PowerAction): [string, ...string[]] {
 
 export async function runPowerAction(action: PowerAction): Promise<PowerResult> {
   const [command, ...argv] = buildPowerArgv(action)
-  const printable = [command, ...argv].join(' ')
+  // The argv as it will actually run, flatpak-spawn prefix and all: this string
+  // is shown in the dialog beside the failure, and half of one is a worse
+  // starting point than none.
+  const printable = printableCommand(...hostCommand(command, argv))
 
   try {
-    await run(command, argv)
+    await hostExecFile(command, argv)
     return { ok: true, command: printable, error: null }
   } catch (error) {
-    // systemctl puts the useful half of a polkit refusal on stderr, so prefer
-    // it over the wrapper's "Command failed with exit code 1".
-    const stderr = (error as { stderr?: string }).stderr?.trim()
-    return {
-      ok: false,
-      command: printable,
-      error: stderr || (error as Error).message
-    }
+    // `classifyHostFailure` already prefers systemctl's own stderr — which is
+    // where the useful half of a polkit refusal lives — over the wrapper's
+    // "Command failed with exit code 1", and adds the one message this path
+    // could not otherwise produce: that a sandboxed launcher was never allowed
+    // to ask the host in the first place.
+    return { ok: false, command: printable, error: classifyHostFailure(error).message }
   }
 }

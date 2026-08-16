@@ -899,6 +899,7 @@ export function App(): ReactNode {
                 scope={ROOT_SCOPE}
                 gfnInstalled={client?.installed ?? false}
                 gfnVersion={client?.version ?? null}
+                gfnProbeError={client?.error ?? null}
                 gfnOpenError={gfnOpenError}
                 refreshing={refreshing}
                 syncing={syncing}
