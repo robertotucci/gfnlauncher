@@ -121,7 +121,7 @@ npm version <patch|minor|major>   # writes package.json + package-lock, creates 
 git push --follow-tags
 ```
 
-Update `CHANGELOG.md` before tagging — the release notes and the AppStream `<releases>` block are both generated from it.
+See [RELEASING.md](./RELEASING.md) for the full procedure, including what to check by hand and what to regenerate after a dependency change.
 
 ## Licence
 

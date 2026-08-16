@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something the launcher should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a deliberately narrow product: a fullscreen, gamepad-only front end for GeForce NOW, read from three metres away. Things that need a pointer, a keyboard, or a second colour in the chrome are usually out of scope on purpose — [ARCHITECTURE.md](https://github.com/robertotucci/gfnlauncher/blob/main/ARCHITECTURE.md) explains the reasoning, and disagreeing with it is fine, but say so rather than around it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The situation on the couch, not the feature. What is awkward today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. How would you reach it with a pad and nothing else?

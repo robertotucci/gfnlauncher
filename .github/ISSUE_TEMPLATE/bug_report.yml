@@ -1,0 +1,64 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if a control appears to do nothing, check the footer and any notice above it — the launcher tries hard to say why rather than failing silently, and that message is usually the whole answer.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it
+      options:
+        - Flatpak (Flathub)
+        - Flatpak (.flatpak bundle)
+        - AppImage
+        - .deb
+        - From source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings shows it, or `flatpak info io.github.robertotucci.GfnLauncher`.
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and session
+      description: e.g. Fedora 42, KDE Plasma, Wayland
+      placeholder: distro, desktop, Wayland or X11
+    validations:
+      required: true
+
+  - type: input
+    id: pad
+    attributes:
+      label: Gamepad
+      description: Make and model, and how it is connected. Leave blank if the problem is not input-related.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: |
+        Run it from a terminal and paste what it prints.
+
+        `flatpak run io.github.robertotucci.GfnLauncher`
+
+        **Do not paste the GeForce NOW client's `console.log`** — that file contains access tokens. `debug.log` beside it is safe.
+      render: shell
