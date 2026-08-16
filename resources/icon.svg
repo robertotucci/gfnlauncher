@@ -1,0 +1,64 @@
+<!-- Source of truth for the application icon. Regenerate the PNG set beside it,
+     from this directory, with:
+
+       for s in 32 48 64 128 256 512 1024
+         rsvg-convert -w $s -h $s icon.svg -o icons/{$s}x{$s}.png
+       end
+
+     A directory of sized PNGs rather than one large one: handed a single file,
+     electron-builder emits a hicolor set with exactly that one size in it, and
+     every panel from then on is downscaling 1024px of hairline stroke into 32.
+     Rendering each size off the vector keeps the stroke crisp where it is
+     actually looked at.
+
+     The glyph is Lucide's `gamepad-2`, path data copied verbatim from
+     lucide-react so the icon and the UI draw the same shape — `gamepad` (the
+     plain rectangle) collapses into a featureless box below ~32px, which is
+     exactly the size a taskbar hands it.
+
+     Colourless, like the rest of the shell: neutral surface, white glyph, no
+     accent. The accent is the user's and it belongs to the focus ring; an icon
+     baked with one preset would contradict the other six. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f1f1f" />
+      <stop offset="1" stop-color="#0a0a0a" />
+    </linearGradient>
+  </defs>
+
+  <!-- The card token fading to the background token, so the tile still reads as
+       a shape against a black taskbar rather than dissolving into it. -->
+  <rect width="1024" height="1024" rx="224" fill="url(#surface)" />
+  <rect
+    x="4"
+    y="4"
+    width="1016"
+    height="1016"
+    rx="220"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.1"
+    stroke-width="8"
+  />
+
+  <!-- Lucide's 24x24 box mapped onto 672px centred: scale(28) also scales the
+       stroke, so the 2/24 weight that makes a Lucide icon look like one is
+       preserved. -->
+  <g
+    transform="translate(176 176) scale(28)"
+    fill="none"
+    stroke="#fafafa"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <line x1="6" x2="10" y1="11" y2="11" />
+    <line x1="8" x2="8" y1="9" y2="13" />
+    <line x1="15" x2="15.01" y1="12" y2="12" />
+    <line x1="18" x2="18.01" y1="10" y2="10" />
+    <path
+      d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"
+    />
+  </g>
+</svg>

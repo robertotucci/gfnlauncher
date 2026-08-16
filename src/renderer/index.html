@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- `dark` is permanent: the launcher has no light theme. It is a class rather
+     than a media query so shadcn's `dark:` variants resolve against us instead
+     of against the desktop's colour-scheme preference. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>GFN Launcher</title>
+    <!-- No remote origins: the launcher runs offline-first and loads nothing it
+         did not ship with. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: https:"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

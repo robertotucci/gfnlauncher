@@ -1,0 +1,269 @@
+# Architecture
+
+This document explains how GFN Launcher is put together and, more importantly, *why* — the constraints that produced each decision, so that changing one does not quietly break another.
+
+For the reverse-engineered GeForce NOW client API this launcher speaks to, see [docs/gfn-api.md](./docs/gfn-api.md). For setting up a development environment, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## The product, in one paragraph
+
+A console-like launcher for NVIDIA GeForce NOW. It runs fullscreen on a TV, is driven entirely by gamepad, starts with the desktop session, and hands game launches to the already-installed native GFN client. The user is on a couch, three metres from the screen, with no keyboard or mouse. Linux only — GeForce NOW here is the `com.nvidia.geforcenow` Flatpak.
+
+Almost every decision below follows from that one sentence.
+
+## The three Electron contexts
+
+Strictly separated. `src/shared/` is the only code all three import, so it must stay free of Node and DOM APIs — it has to compile into every bundle.
+
+- **`src/main/`** — everything privileged: spawning the GFN Flatpak, autostart registration, catalog cache on disk, settings, and all calls to NVIDIA backends. The renderer never spawns a process, touches the filesystem, or holds a GFN token.
+- **`src/preload/`** — one `contextBridge` object exposing `window.launcher`. Every method is an explicit passthrough; there is deliberately no generic `invoke(channel, …)` escape hatch, so the renderer can only reach the channels listed in `src/shared/ipc.ts`.
+- **`src/renderer/src/`** — React UI only, reaching outward solely through the bridge.
+
+`sandbox: true` is on, which means **the preload cannot be an ES module**. `electron.vite.config.ts` forces CommonJS output (`index.cjs`) for the preload build specifically; `package.json` is otherwise `"type": "module"`. Changing either side breaks startup.
+
+## Input and focus
+
+Two systems that are easy to conflate. They are separate.
+
+### `src/renderer/src/gamepad/` — hardware into intents
+
+One `requestAnimationFrame` loop for the whole app, in `GamepadProvider`, fanning out to subscribers held in a ref so delivering an intent never re-renders the provider. Per-component polling would each run its own repeat clock and the UI would accelerate unpredictably. Buttons edge-trigger once per press; directions hold-to-repeat. `intents.ts` holds the button map, deadzone, repeat timings and the keyboard mirror.
+
+The button map:
+
+| Button | Action |
+| --- | --- |
+| A | Details — opens the panel, from a tile or a search result |
+| B | Back |
+| X | Search |
+| Y | Settings |
+| ☰ Menu/Start (index 9) | Play |
+| LB / RB | Step through the set in front of you — genres on the grid, screenshots in the viewer |
+
+The keyboard mirror of ☰ is **F1, not a letter**, and LB/RB are `[` and `]`. The search overlay types letters, and by the same rule that keeps `Backspace` off "back", a key cannot mean both.
+
+**The action is called `start`, not `details`.** Button 9 has no meaning of its own — it plays on the grid and closes on the details panel — so it is named after the physical button. Naming it for one of its two jobs is how you end up with a `case 'details'` branch that launches a game.
+
+A opening the panel means the handoff costs two presses, both on A: `openDetails` lands the cursor on **Play**, so A-A is the whole journey. ☰ keeps the one-press launch for someone who already knows what they want. Handing a game to GFN is still what the launcher is *for* — it just is not what a bare A does.
+
+**A button can mean different things on different layers, and the legend says so.** Inside the details panel A is Play, Set launch store, or View depending on which element holds focus, and X — inert there, since there is nothing to search — becomes "mark owned". So the `detailsGame` branch of the legend in `App.tsx` reads `focusedId`, not just state. A footer that says "Play" while A sets a store is worse than no footer.
+
+**The footer legend names actions, not buttons.** A `LegendEntry` carries `{ action, label }`; `glyphFor` in `src/renderer/src/components/glyphs.tsx` resolves the glyph from `useGamepad().scheme`, so the same row reads `A` / `✕` / `ENTER`. The scheme is last-touched-wins — a bound keypress switches it to `keyboard`, any pad input switches it back, and no pad connected forces `keyboard`, because the legend is the only manual the user gets and it has to describe the thing in their hands. `scheme.ts` reads the family off the Chromium pad id (Sony's vendor `054c`, else the product name; Xbox is the fallback, since the standard layout is named after it). Keyboard labels come from `ACTION_KEYS`, derived from `KEY_BINDINGS` rather than written out again — an action with no key bound has its row dropped, so a new legend entry needs a keyboard binding or it vanishes when the pad does.
+
+Glyphs come from Lucide where the button really is a shape (PlayStation's `X` / `Circle` / `Square` / `Triangle`, and `Menu` for ☰ on both pads) and stay as text where it is a character (Xbox's A/B/X/Y, `LB`/`RB`, keycaps). They were Unicode literals once; a face font with no `△` in it turns the footer into tofu, and the launcher has to render correctly offline on whatever it shipped with.
+
+### `src/renderer/src/focus/SpatialFocus.tsx` — where focus goes
+
+A tile grid needs geometry, not DOM order: pressing down has to land in the same column, which document order cannot express. `scoreCandidate` (pure, unit-tested) rejects candidates that are not in the direction of travel, then ranks the rest by distance plus an orthogonal-drift penalty.
+
+Consequences worth knowing before changing UI code:
+
+- Register interactive elements with `useFocusable(id, { scope, onConfirm })`. An element that is not registered is unreachable — there is no pointer fallback.
+- `scope` isolates a layer. The search overlay uses `SEARCH_SCOPE` and the details panel `DETAILS_SCOPE`; navigation only ever considers the active scope. Ids are global across scopes, so they are namespaced (`tile:`, `result:`, `detail:`).
+- **A closed layer hands focus back explicitly.** `setActiveScope(ROOT_SCOPE)` alone re-runs `focusFirst`, which lands on the nav rail rather than the tile the user came from; `closeDetails` in `App.tsx` restores the remembered id instead. The screenshot viewer (`SHOTS_SCOPE`, z-40) does the same one layer up, back to the exact thumbnail, and `closePower` returns to `nav:power`.
+- **Focus is virtual.** `SpatialFocus` tracks a `focusedId` in React state and **never calls `element.focus()`**, so `:focus-visible` never matches and shadcn's `focus-visible:` variants are inert. Every focusable paints `focus-ring` off the `focused` boolean instead. The same fact is what lets a Radix component sit inside a focusable without a fight — see the Switch in `SettingsScreen`.
+- **The "land in the content" effect keys on the reason, not the data.** `visibleGames` changes identity whenever a genre is picked or a title is marked owned, and watching the list would yank the cursor out of an open panel. It compares a `view/genre` string against a ref, skips while any overlay is up, and — the subtle part — records the landing *only once it has a target*, because the grid is empty on first paint and marking it done there strands focus on the nav rail.
+- Overlays are conditionally mounted, so an exit animation needs the layer kept alive while it plays — hence the `closing` flag and the `EXIT_MS` timeout in `App.tsx`.
+- A second *focus model* must not nest inside a focusable. A Radix control that takes DOM focus and handles its own keys would compete; a Radix control rendered inert (`tabIndex={-1}`, `aria-hidden`, `pointer-events-none`, driven by a prop) is just a picture and is fine. `SettingsScreen`'s toggle rows carry `role="switch"` themselves and render a real shadcn `<Switch>` as the indicator.
+- The Gamepad API only reports to a **focused** window. A blurred launcher is a dead launcher; the footer surfaces this rather than letting input die silently.
+
+## Where shadcn/ui fits
+
+shadcn is the UI framework, not just the theme layer: stock `neutral` dark tokens, `cn`, cva, the registry workflow, and the registry's own components — `Button`, `Badge`, `Card`, `Separator`, `Switch`, `Dialog`, `Skeleton`. Add more with `npx shadcn@latest add <component>`; `components.json` already points at `new-york` / `neutral` / `lucide`, and generated files land in `src/renderer/src/components/ui/` (excluded from lint).
+
+Two adaptations the focus model forces, and only two:
+
+- **Focus rings come from the `focused` boolean**, not from `focus-visible:`. Strip the `focus-visible:` classes off a generated component if you rely on them; keep them otherwise, they are harmless.
+- **`<html class="dark">`** in `index.html`, with `@custom-variant dark (&:is(.dark *))` in `globals.css`. The launcher has no light theme, but every registry component ships `dark:` variants, and without the class those resolve against the desktop's colour-scheme preference instead of against us.
+
+Overlays (search, details, screenshots) are hand-rolled `fixed` layers rather than Radix `Dialog`s. Their open/close choreography — `closing` flag, `EXIT_MS`, explicit focus restore — is the most carefully tuned code in the renderer, and Radix would want to own the focus trap, the Escape key and the restore target. The Power dialog **is** a real `Dialog`, because it was new and had nothing to break; it neutralises `onOpenAutoFocus`, `onCloseAutoFocus`, `onEscapeKeyDown` and `onPointerDownOutside` so B and Escape close it through one path.
+
+The only other UI dependency is `qrcode-generator` — zero transitive deps, ships its own types — behind `StoreQr.tsx`. `variants.storeUrl` is useless on a TV with no browser and no pointer, and a code the user photographs moves the link to the one device in the room that can follow it. The matrix is rendered as inline SVG rects rather than a canvas, so the dark modules take `currentColor` and stay on the palette. (`qrcode` was rejected: it pulls in `yargs` and `pngjs`.)
+
+## GeForce NOW integration
+
+### Launching a game
+
+The CEF binary accepts a deep link in this exact shape:
+
+```
+--url-route="#?cmsId=<ID>&launchSource=<SRC>&shortName=<NAME>&parentGameId=<PID>"
+```
+
+**The Flatpak wrapper discards argv.** `/app/bin/GeForceNOW` reads `$1` only as a relaunch sentinel and then invokes `./GeForceNOW` with no arguments, so `flatpak run com.nvidia.geforcenow --url-route=…` silently drops the deep link and opens the home screen. `src/main/gfn/launch.ts` therefore targets the CEF binary directly and reproduces the wrapper's working directory:
+
+```bash
+flatpak run --command=/app/cef/GeForceNOW --cwd=/app/cef com.nvidia.geforcenow \
+  --url-route="#?cmsId=<ID>&launchSource=External"
+```
+
+`launchSource=External` is a literal lifted from the shipped bundle — one of four values in an enum the bundle maps straight onto a telemetry dimension, so it tags provenance and selects no behaviour. Bypassing the wrapper also skips `GeForceNOW_Downloader` and the self-update check, so the launcher should not become the user's only way to start GFN.
+
+**Which is why `gfn:open` exists and goes the other way.** `buildOpenArgv()` is a plain `flatpak run com.nvidia.geforcenow` — through the wrapper, precisely so the downloader and the self-update check *do* run. It is the Settings row that hands the screen to the real client for the things the launcher does not mirror (stream quality, account linking, controller mapping), and it `stepAside`s **unconditionally**, not behind `hideOnLaunch`: a fullscreen launcher sitting on top of the window it just opened is a button that looks broken.
+
+**Confirmed against client v2.0.87.130**: a cold start receives the route verbatim (`urlRoute value is: #?cmsId=…&launchSource=External&shortName=…`) and the app builds a streamer config from it. The parameter order in `buildUrlRoute` is not a guess either — the binary's own string table holds that template contiguously, because it is how the client relaunches itself. To watch a link arrive, grep `~/.var/app/com.nvidia.geforcenow/.local/state/NVIDIA/GeForceNOW/debug.log`; note the `.var` path, since the host-side `~/.local/state/NVIDIA/GeForceNOW/` holds only the *wrapper's* log and window geometry, and note that `console.log` beside it **contains tokens** — grep it, never paste it.
+
+**A running client swallows the deep link, and that is why `launchGame` kills it first.** A second `flatpak run` carrying a route reaches the *new* process, which logs `Launched with URL route!` and then exits 0 within a millisecond without forwarding anything. The running client never learns the id. This is not an edge case — the client sits on the mall after a game exits, so it is the normal state from the second launch of a session onwards. The old code handled it in the worst possible way: `spawnFlatpak` resolved `ok: true` because *flatpak* had started, so the launcher wrote play history for a game that never ran and minimised itself behind a client showing something else. So `launchGame` probes `flatpak ps`, calls `flatpak kill`, waits out `KILL_SETTLE_MS`, and only then spawns — a fresh instance racing the dying one is refused by the same lock that made the kill necessary. The probe is load-bearing, not defensive.
+
+**The web player is the fallback, not a peer, and it never happens by itself.** `src/main/gfn/webStream.ts` opens `play.geforcenow.com/mall/#/streamer?…` in a `BrowserWindow` on the `persist:gfn-session` partition, so a login captured by `webAuth` carries straight into it. `Settings.launchMode` chooses and `resolveLaunchPath` in `src/shared/games.ts` is the decision, but **the default is `native`, not `auto`** — deliberately. `auto` decides from `detectGfn()`, so a probe that fails transiently (`flatpak` not yet on `PATH` when the launcher autostarts with the session) reads as "no client" and quietly streams in a browser window instead of handing the game to the installed client. It would work, and it would not be what was asked for. `native` fails loudly instead, and `LaunchNotice` names the fix. `auto` stays available for anyone who wants it knowing the cost; `games.test.ts` pins the default so a refactor cannot flip it back.
+
+Three more things about the web path:
+
+- **The two clients ship different route tables**, so the two URL forms are not interchangeable. The Flatpak's bundle has a `deeplink` route and no `streamer`; the web build is the other way round.
+- **The web route takes only a `cmsId`** — no `shortName`, no way to pin a store — so a multi-store title asks the user which one, where the native deep link resolves it for them.
+- **It must not call `stepAside`.** That stream is our own window; a minimised launcher behind it could not be raised again once it closed, because the pad cannot focus a blurred window. `restoreLauncher` in `ipc.ts` is the way back, and it re-applies fullscreen for the same reason `second-instance` does.
+
+### Backends
+
+[docs/gfn-api.md](./docs/gfn-api.md) is the reference — endpoints, every GraphQL document, the filter shapes, and how each fact was derived. Read it before touching `src/main/gfn/`. What follows is only what shapes the code's structure.
+
+Three distinct services, not to be conflated.
+
+**The public game list — the whole catalog, no account.** `POST https://api-prod.nvidia.com/services/gfngames/v1/gameList`, a bare GraphQL document sent as `application/json`, and **a `User-Agent` is mandatory** or the connection is dropped with no status at all. ~5.9k titles in 8 pages of 750, about twelve seconds. It has no `searchQuery`, `orderBy` or `filters`, so `src/main/gfn/publicCatalog.ts` pages the lot and `fetchPublicCatalogGames` sorts it here. It knows nothing user-relative: everything comes back unowned, and `playabilityState` is deliberately not requested because signed out it reads `UNPLAYABLE_DUE_TO_UPGRADE` for every title. There is no per-app query and no language data.
+
+This feed is also the only place the launcher reads **ray tracing** from: `variants { gfn { features { ... on GfnSubscriptionFeatureValue { key value } } } }`, whose entries read `{ key: "RTX_ENABLED", value: "true" }` — 171 titles, and 0.58 MB across the whole walk. The flag is **per variant** and 17 titles disagree across their stores, so `variantRtx` in `wire.ts` follows the GFN client and treats any ray-traced edition as enough for one badge.
+
+Signed in, the flag is merged in from the public walk `refreshCatalog` already makes for the details panel. **Match on the variant id *and* on `sortName`** — the two feeds hand out different ids for the same Battle.net edition, and an id-only merge silently dropped the four World of Warcraft titles. `cmsId` is not a stable cross-feed key; the details index only gets away with it because it is built and read from the same walk.
+
+**When probing this API, try `X { __typename }` before concluding `X` does not exist.** A bare object-typed field is an invalid document, and the gateway answers that with the same opaque 500 it gives an unknown field — which is how `features` ended up on the rejected list in `docs/gfn-api.md` for two sweeps. `keywords` looks like the RTX source and is not: its `rtx` marker misses Fortnite, Pragmata and Indiana Jones, and it costs 29 MB.
+
+**GraphQL — catalog, library, ownership.** `https://apps.gxn.nvidia.com/graphql?requestType=<type>`, `Content-Type: application/graphql`, `Authorization: Bearer`, `NV-Client-ID` / `NV-Client-Version`. `requestType` is a cache-partitioning hint, not a selector — the operation travels in the body.
+
+**ALS (Account Linking Service) — store links and library sync.** REST at `{accountLinkingServerUrl}/v1/`; `POST /v1/sync/{providerId}` returns **202 Accepted** and completes asynchronously. Its base URL is *not* a constant: it comes from the client's runtime `appConfig` and a proxy override can replace it. It is never hardcoded — but it does not have to be intercepted either. **The `appConfig` is a plain JSON file inside the installed Flatpak**, at `<installPath>/files/mall/shared/assets/config/config.json`, and `src/main/gfn/appConfig.ts` reads `accountLinking.server` (`https://als.geforcenow.com`) straight out of it. That file is also where `lcars.serverUrl`, `starfleet.url` and `cms.server` live: look there before guessing at any GFN host. Note the path is `/v1/`; the `/v2/` this document carried for two sweeps was never observed. ALS authentication is the part still unproven.
+
+Three things about the GraphQL API drive the design:
+
+- **Search and filtering are server-side**, with cursor pagination (`first` / `after`). The catalog runs to thousands of titles — never fetch it all and filter in the renderer. `paginate()` in `graphql.ts` caps at 10 000 (the catalog measured 5 890 in August 2026, so the previous 5 000 was silently dropping titles) and reports truncation rather than looping forever against an API we do not control. The public feed above is the exception, and only because it offers no server-side filtering at all.
+- **"My library" is a filter, not an endpoint**: `{variants:{gfn:{library:{status:{notEquals:"NOT_OWNED"}}}}}` on the same `apps` query.
+- **An app has one variant per store.** The launchable id is a *variant* id, so `mapApp` picks the variant GFN marked `selected`, then any owned one, then the first — mirroring what the client does on play. An app with no variant id is dropped: its tile would render but never launch.
+
+`GfnGame.cmsId` is that picked variant, and it is also the game's **identity** — focus ids (`tile:`, `result:`), the details index key, the cache key. So when the user picks a different store it is *not* rewritten; `selectedVariantId` records the choice and `resolveLaunchTarget` in `src/shared/games.ts` resolves it at launch. Each `GameStoreOwnership` therefore carries its own `variantId`, `shortName` and `storeUrl`. Resolve the id and the slug **together**: pairing a chosen edition's id with another store's slug still produces a valid deep link, pointing at the wrong thing, and nothing reports an error.
+
+`LaunchRequest` therefore carries **both** ids: `cmsId` is the variant the deep link gets, `gameId` is the `GfnGame.cmsId` it came from. Anything on our side of the bridge that has to match a tile — play history, today; anything keyed on identity, tomorrow — reads `gameId`. Keying it on the launched variant instead would silently fail to match on exactly the ~850 multi-store titles, and only for users who had picked a store.
+
+`mapApp` isolates the wire schema from `GfnGame`, the launcher's own model — a GFN schema change should stop at that function. The wire types and the two decisions both mappers must agree on (`pickLaunchVariant`, `imageUrl`) live in `src/main/gfn/wire.ts`.
+
+### Two models, two caches
+
+`mapDetails` in `src/main/gfn/details.ts` is the second mapper, producing `GameDetails` — description, screenshots, controls, subscriptions, release date. It exists because there is **no per-app query**: everything the details panel shows must be harvested during the same walk or not at all.
+
+The result is deliberately *not* folded into `GfnGame`. `catalog.json` (~5 MB) is what `catalog:get` clones to the renderer on every start; `details.json` (~9 MB) stays in main and is read one title at a time through `catalog:details`, lazily parsed on the first request of a cold start. Both are memoised in their module (`patchGame` would otherwise re-read five megabytes to change one field).
+
+Two things keep the panel from silently coming up empty — the failure mode here, since a missing key throws nothing:
+
+- **Details are indexed per variant, not per app.** Signed in, a tile's id is the edition the user owns; the details index is built from the public feed, which knows no ownership and settles on Steam. Keying only the launch variant would blank the panel on the ~850 multi-store titles.
+- **The authenticated path harvests details from the public feed too.** Descriptions, screenshots and `supportedControls` exist *only* there, so a signed-in refresh walks both: the session for ownership, the public feed for what a game actually is. That failure is caught separately — it costs the panel, not the catalog.
+
+`CATALOG_CACHE_VERSION` in `src/shared/types.ts` exists for exactly this class of change: a cache written by an older harvest is incomplete in ways nothing can detect at read time, so bump it and let the background refresh replace it.
+
+### Play history — the third store, and the only one that is ours
+
+`userData/recent.json`, behind `src/main/recent.ts`, backing the **Recent** rail item. It exists as its own file for one reason: `refreshCatalog` rewrites `catalog.json` wholesale, so anything hand-added to a `GfnGame` is destroyed by the next network walk. `patchGame` is the only surgical path into that file and it is explicitly a bridge, not a store of record. History has to outlive the catalog, so it lives beside it.
+
+It is written in the `gfn:launch` handler, after a confirmed spawn — one choke point, downstream of the only event that means "a game started". It records `request.gameId`, never `request.cmsId`. `pushRecent` is pure (dedupe, promote, truncate) and unit-tested, in the same spirit as `buildPowerArgv`.
+
+The renderer holds ids, not games: `recentGames` in `App.tsx` resolves them against the catalog and **drops what no longer matches**, because a title can leave the catalog between two runs. Recent is also the one grid view with **no genre strip and no LB/RB cycling** — it is a chronology, not a collection, and filtering it would punch holes in an order the user is reading as "what I played, in the order I played it". `visibleGames` short-circuits on `view === 'recent'` for that reason; a filter added there has to be hidden too, or the strip will lie.
+
+### How the owned-games list actually works
+
+The user does **not** add owned titles one by one. The model is *link once, sync many*: they link a store account (Steam, Epic, Ubisoft, EA, GOG, Xbox) and GFN pulls that store's whole library. When a title later enters the GFN catalog and the user already owns it on a linked store, it appears automatically.
+
+`POST /v1/sync/{providerId}` is what GFN's own "Refresh library" button calls — it forces an immediate resync instead of waiting for the periodic one. `library:syncAll` fires it at every provider whose `state` is `linked`, and the Settings row then waits `SYNC_SETTLE_MS` before reloading the catalog: a 202 says the request was taken, not that the library is current, so there is nothing to await and the wait is GFN's own `defaultSyncWaitInterval` rather than a guess.
+
+There *is* also a manual override: `mutation AddOwnedVariant(variantId, language)` (and `RemoveOwnedVariant`, `SelectOwnedVariant` to choose which store's edition launches), wired as `setOwned` and `selectVariant` in `src/main/gfn/library.ts` and surfaced as the store chips in the details panel. It is the escape hatch for what sync misses, not the main path — a launcher that asks people to tag games by hand has misunderstood the product.
+
+**A mutation is not believed until the server accepts it.** `src/main/ipc.ts` runs the mutation first and only then calls `patchGame` in `catalog.ts`, which edits the one entry in the memoised snapshot, rewrites `catalog.json`, and returns the updated game for the renderer to swap in. That write-through is a *bridge*, not a store of record — the change lives on NVIDIA's side and the next authenticated refresh brings it back on its own — but without it a one-field edit would cost a twelve-second re-walk. Only `AddOwnedVariant` is transcribed from the bundle; the other two are inferred and unverified, so failures here are expected rather than exceptional.
+
+### Authentication
+
+The launcher hosts NVIDIA's own web client in a `BrowserWindow` it owns and reads credentials off the requests that window makes (`src/main/gfn/webAuth.ts`). Three other routes were tried and are dead — reusing the desktop client's on-disk token, borrowing GFN's OAuth client, and registering our own. `docs/gfn-api.md` records the evidence for each.
+
+Interception yields the bearer token, the `NV-Client-*` headers **and** `vpcId` (from the POST body, correlated to the headers by `details.id`). Taking them from a real request beats guessing.
+
+Three rules this imposes:
+
+- **Never call `ensureSession` speculatively.** A headless capture boots the whole GFN web app and can block for its full timeout. It is gated on the persisted `gfnLinked` flag, which is why every call site reads that flag and passes it. A regression here shows up as the UI hanging on "Loading settings…".
+- **Keep provider listing off the first-paint path.** `App.tsx` loads it in a second, non-blocking effect for the same reason.
+- **The token is memory-only.** The login persists in the browser partition, which is the right place for a cookie jar; the bearer is not written to disk, and never into this repo.
+
+`getSession()` is the synchronous, no-network accessor; `ensureSession()` may open a window. Use the former on any hot path.
+
+**Launching needs no token** — the deep link goes to the local client — so the launcher stays useful signed out: the catalog falls back to the public feed (real ids, so every tile launches), providers return `[]`, sync and `setOwned` refuse with a reason. What is missing without a session is ownership, and therefore the library view, not the ability to play.
+
+Sign-in itself is the one part of the product that is not gamepad-navigable: NVIDIA's login page expects a pointer and keyboard.
+
+### What is fixture data
+
+The catalog resolves in this order: authenticated feed when signed in, public feed when not, disk cache when offline, `src/main/gfn/fixtures.ts` when there is nothing else. **Fixture `cmsId`s are placeholders and will not launch** — the titles are real only so the UI can be judged with realistic string lengths.
+
+Fixtures are therefore the offline-first-run case, not the normal signed-out one. `App.tsx` treats a snapshot with `source: 'fixture'` as a machine that has never fetched anything and pulls the public feed in the background, after first paint.
+
+### Server status — the fourth backend, and the only one that is not NVIDIA's
+
+`src/main/status/`, behind the **Status** rail destination. `status.geforcenow.com` is a stock Atlassian Statuspage; `docs/gfn-api.md` has the endpoint survey and every wire shape. Three things shape the code.
+
+**The nameplate is the feature; the fleet is context.** NVIDIA's page answers "is GeForce NOW up?" — the question on a sofa is "is *my* box up?", and only the launcher can answer it, because only the launcher can read the client's routing configuration off this disk. So the screen opens with one datacenter and the other 75 come after.
+
+**The zone match is exact, offline, and needs no second request.** `remoteOverrides.metaData.zoneName` in the client's `sharedstorage.json` *is* the Statuspage leaf name — the client says `NP-FRK-08`, the page calls that component `NP-FRK-08 [RTX 5080]` — so `resolveZone` strips the tier suffix at map time and compares strings. `prod/v2/serverInfo` would resolve an Auto region authoritatively and is unauthenticated, and it is deliberately **not** on this path: it only earns a request when there is no `zoneName` at all, and then the honest answer is "stream once and we'll know".
+
+**`sharedstorage.json` contains a live bearer token, an `idToken` JWT with the user's email, and the machine's MAC address.** `parseZoneAssignment` reads three subtrees and returns six declared fields. Never log the parsed root, never widen the return type to "whatever was in there", and keep the key-set assertion in `zone.test.ts` — a fixture full of secrets in, six facts out, is the only thing standing between that file and the renderer.
+
+Two departures from house convention, both deliberate:
+
+- **The cache is memory-only.** Every other store here persists, and this one must not: a catalog from last week is merely incomplete, a status board from last week says "all systems operational" about a datacenter that is on fire. A 41 KB payload behind `max-age=10` with ETag revalidation makes a cold fetch cheap, and the half that matters most — region, zone, routing, latency — is read from a local file and works offline anyway. `STATUS_TTL_MS` serves the cached board for a minute so that leaving the view and coming back is navigation, not a refetch.
+- **It is the one `fetch` in the repo with a timeout.** `AbortSignal.timeout(8_000)`. Elsewhere a stalled request costs a background walk nobody is watching; here it costs a spinner on a button the user just pressed, on a screen with no keyboard, and a control that never finishes is the failure nobody can diagnose. A second timeout added somewhere should cite this precedent — otherwise it is drift.
+
+**This screen is the documented exception to the one-colour rule.** Health gets hues, on two conditions that are the whole reason it is allowed to.
+
+*The colour is on the dot, not on the row.* `HealthMark` paints a solid dot from `--status-ok` / `--status-info` / `--status-warn` / `--status-alert` / `--destructive` (reused, rather than a second red), all held at lightness 0.72–0.80 so no state is louder than its neighbour for reasons other than its hue. Labels stay `muted-foreground` for the two states that need no action and take the hue only for the three that do — 36 healthy regions rendered as 36 green *words* would mean the one red word had to shout over them instead of standing alone.
+
+*It is confined to this screen.* Nothing outside `src/main/status/` and `StatusScreen`/`HealthMark` may use these tokens. The reason the rest of the chrome is colourless is that cover art has to be the most saturated thing on screen; this view has no cover art on it and has 76 datacenters, where telling "fine" from "degraded" from "down" by fill and weight alone stops working somewhere past the first dozen rows. Put a status hue on a tile, a rail item or the footer and that argument stops holding.
+
+The **Yours** badge on the user's own region is `bg-primary` — the accent, on the one row out of thirty-six they came here for. It is the same colour as the focus ring, so it only competes with the cursor when the cursor is already on that row.
+
+`status:refresh` is the view's landing target, so A on arrival re-checks. The nameplate and the summary line are not focusable — they are the answer, not controls — and the region and incident rows are focusable partly because expanding them is useful and partly because a screen with one focusable cannot be scrolled with a pad.
+
+## Design
+
+Console-like, not desktop-like. Reference points are the PS5 and Steam Big Picture, not a web app scaled up.
+
+**The shell is colourless so the games are not.** Stock shadcn `neutral` dark, and the only chromatic thing in the entire chrome is the accent — which paints the focus ring, the primary button, the RTX filter, and nothing else. Every cover in the grid is therefore the most saturated object on screen, which is the right answer for a screen whose whole job is showing you games. A second colour to mean something is not the tool; use weight, a border, or an icon.
+
+**The one exception is the server-status screen**, which paints service health in green/blue/amber/orange/red. It earns it by being the only view with no cover art on it and 76 datacenters in a list, where fill and weight stop separating "fine" from "degraded" past the first dozen rows. The `--status-*` tokens are confined to `HealthMark` and `StatusScreen`.
+
+**RTX is the one thing besides focus allowed to wear the accent, and it still loses to focus.** The `RTX ON` chip in `GenreStrip` is accent at rest, but as an *outline* — `border-primary/70 bg-primary/10 text-primary` — so the focused state has somewhere brighter to go and keeps the solid `bg-primary` fill every other chip gets. The tile badge is accent *text* on a dark blurred pill rather than an accent fill, for the same reason at grid scale: ninety solid accent pills would out-shout the one ring that is the cursor.
+
+**The accent is the user's, not ours.** `ACCENT_PRESETS` in `src/shared/theme.ts` is the whole vocabulary — seven presets, all at lightness ≥ 0.80 so a single dark `--primary-foreground` is always readable and focus stays the brightest thing on screen. `Settings.accentColor` stores the **id**, never the colour: the value lands in a CSS custom property, and an id is what stops a hand-edited `settings.json` from injecting arbitrary CSS. `sanitise()` in `src/main/settings.ts` validates it against the same list. The renderer pushes `--brand` onto `document.documentElement`; `globals.css` already declares white there, so nothing flashes before settings arrive.
+
+`UI_SCALE_PRESETS` beside it is the same pattern for the same reason — five steps from 75% to 175%, `Settings.uiScale` stores the id, `isScaleId` guards `sanitise()`. Only the mechanism differs: main applies it with `setZoomFactor` rather than the renderer setting a custom property, because zoom catches border widths and ring offsets that no rem multiplier reaches. **Anything added to `Settings` needs its own branch in `sanitise()`** — it is an explicit allow-list, so a field without one is silently dropped on every read *and* every write, which reads as "my setting does not save".
+
+**Focus is the only cursor in the room, so it is a ring with an offset.** The `focus-ring` utility in `globals.css` is the one custom utility left, and it exists because focus here is virtual. Anything focusable must paint it.
+
+Because that ring is drawn *outside* the element — and focused tiles also scale up — **every scroll container holding focusables needs padding plus a matching `scroll-p-*`**. Padding alone only helps the first row: `focus()` calls `scrollIntoView({ block: 'nearest' })`, which parks an element flush against the viewport edge and shears the ring off. Note also that `overflow-x-auto` on its own makes a container clip *both* axes, which is why the genre strip and the screenshot strip carry vertical padding they otherwise would not need.
+
+**Hierarchy is size and weight, and the root scales.** Geist has no width axis, so `html { font-size: 20px }` does the 10-foot work in one line and every rem-based Tailwind utility follows. That line used to be `clamp(16px, 1.05vw, 20px)` and **must not go back to `vw`**: interface size is a user setting applied as `webContents.setZoomFactor` (`src/main/uiScale.ts`), and zoom shrinks the CSS viewport by exactly the factor it magnifies by — so a `vw` term is invariant under it and the clamp cancelled the user's choice outright between 100% and ~130%, leaving the type the one thing on screen that refused to grow. Anything still sized in `vh`/`vw` — the hero band's `h-[34vh]`, the `clamp(…, 4.5vw, …)` headings — stays a proportion of the *screen* at every scale, which is the right answer for those and a trap for anything else. Write plain Tailwind (`text-2xl font-semibold tracking-tight`, `font-mono text-xs tabular-nums`). Fonts are self-hosted via `@fontsource-variable` — the launcher starts at boot and must render correctly offline.
+
+**Artwork is scrimmed, never bare.** The hero band and the details panel both paint cover art under two gradients — one horizontal for text legibility, one vertical to dissolve the band into the grid. This is not decoration: unscrimmed 1920×1080 art would out-shout the focus ring. Every image falls back to `placeholderGradient`/`placeholderBackdrop` in `src/renderer/src/lib/artwork.ts` on a null URL *or* a failed load, so a title without art still looks deliberate. Those placeholders are **neutral**, varying only in lightness off a hash of the title: inventing a hue per title would put more colour in an empty tile than there is in the whole interface.
+
+The screenshot viewer (`ScreenshotViewer.tsx`) is the **one** exception, and only because it earns it: there is nothing else on that layer to point at, so no cursor to lose, and scrimming would be dimming the entire subject. Everywhere a focusable sits beside artwork, the artwork loses.
+
+**Genres are shown through `genreLabel`, never raw.** The catalog returns twenty `SCREAMING_SNAKE` codes; `src/shared/games.ts` maps them, abbreviating the ones that are a paragraph at three metres (`FIRST_PERSON_SHOOTER` → `FPS`) and title-casing anything new. There is no `HORROR` and no `ROGUELIKE` — the vocabulary is exactly those twenty, which is also why `fixtures.ts` uses real codes rather than invented ones.
+
+**There is no top bar.** Above the footer the screen belongs to cover art, starting at the first pixel — a TV renders a picture better than it renders chrome. All of the launcher's own state lives in one strip along the bottom: `StatusFooter.tsx` carries the button legend on the left and connection state (`ready` / `absent` / `handoff` / `failed`) plus the GFN client version on the right, with `LoadingBar` as a 2px hairline directly above it and `LaunchNotice` above that. This replaced an animated `SignalTrace` across the top; something new competing for attention up there should be cut rather than escalated.
+
+**`LaunchNotice` is where a failed launch goes, and it obeys all three rules at once.** Bottom-anchored, so it never covers artwork; **colourless**, distinguished by a `TriangleAlert` and `text-foreground` weight rather than a hue, because `--status-*` belongs to the status screen and the accent belongs to focus; and **not focusable**, so it stays out of `SpatialFocus` entirely — nothing on it is a control, there is no scope to activate and no focus to hand back, which is also why it auto-dismisses instead of carrying a dismiss button. It shows a sentence from `launchFailureReason` plus the failing argv, because "spawn flatpak ENOENT" names the fault exactly and explains nothing to somebody on a sofa. Before it existed a failed launch only reached `console.error`, and the footer went on saying `HANDING OFF` for the full 2500 ms — the launcher's own worst-case failure, a control that silently does nothing.
+
+Tokens live in `src/renderer/src/styles/globals.css`. Use the semantic ones (`bg-background`, `text-muted-foreground`, `border-border`, `bg-primary`) — a literal colour in a component is a colour the accent switch cannot reach.
+
+## Power
+
+The launcher is the last thing on screen before the TV goes off, so it can end the session: nav rail → Power → Back to desktop / Sleep / Restart / Turn off. `src/main/power.ts` shells out to `systemctl <verb>` with `execFile` — the same three verbs every desktop environment calls, mediated by logind and polkit, needing no native D-Bus module (`npmRebuild: false` and `externalizeDepsPlugin` would make adding one a build-config problem). `buildPowerArgv` is pure so the argv is unit-tested without ever suspending the machine running the suite.
+
+Nothing here is privileged, and the channel validates the action against the union before it becomes an argument to `systemctl`. A refusal comes back as an error the dialog shows: on a screen with no keyboard, a button that silently does nothing is the one failure nobody can diagnose.
+
+**"Back to desktop" shares the dialog and nothing else.** It is `app:minimize`, not a `PowerAction` — every value in that union becomes an argument to `systemctl`, so a row that ends nothing must not be able to reach it, which is why `PowerDialog` renders it above `CHOICES` and a `Separator` rather than inside the array. `stepAside()` in `src/main/ipc.ts` **drops fullscreen before minimising**: on Linux an iconify request aimed at a fullscreen surface is one many window managers, and every Wayland compositor, are free to ignore, and the launcher would silently stay on top of what it was stepping aside for. `hideOnLaunch` goes through the same helper for the same reason. `second-instance` in `main/index.ts` re-applies fullscreen on the way back, because a restored window otherwise comes back at 1600×900 and stays a desktop app. Coming back at all needs a mouse or keyboard — the Gamepad API only reports to a focused window — and the row's own description says so.
+
+**Waking the machine with the pad is not something the launcher can do.** `/sys/bus/usb/devices/*/power/wakeup` is root-owned; it takes one udev rule, documented in [docs/wake-on-gamepad.md](./docs/wake-on-gamepad.md). Settings used to carry a card pointing at that file; it was static text with no control in it, so it is gone and the doc is the only pointer left. Privilege escalation is not on the table for this.
+
+## Autostart
+
+XDG `~/.config/autostart/gfn-launcher.desktop`, written by `src/main/autostart.ts` rather than Electron's `setLoginItemSettings` (a thin, inconsistent wrapper on Linux; a plain desktop file is inspectable and fixable by hand). Inside an AppImage the mounted exe path is temporary, so `process.env.APPIMAGE` is the only stable `Exec=` target. The desktop entry — not `settings.json` — is the source of truth for whether autostart is on.

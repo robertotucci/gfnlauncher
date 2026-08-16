@@ -1,0 +1,48 @@
+# Reverse-DNS off the code-hosting URL rather than a domain, because Flathub
+# verifies ownership of whatever the id claims: `io.github.<user>.<App>` needs
+# only the GitHub account, where `dev.rtucci.*` would need rtucci.dev to serve a
+# verification file. It also has to be settled before the first public release —
+# the id names the Flatpak's private directory (~/.var/app/<id>), so changing it
+# later strands every user's settings, catalog cache and play history.
+appId: io.github.robertotucci.GfnLauncher
+productName: GFN Launcher
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - package.json
+  # The `?asset` import in src/main/index.ts compiles to a path back out of
+  # out/main into this file rather than copying it, so the allow-list has to
+  # carry it or the packaged window has no icon. The rest of the set is the
+  # installer's business, not the app's, and the .svg source ships nowhere.
+  - resources/icons/512x512.png
+  - '!**/*.map'
+linux:
+  # fpm writes this into the .deb control file and refuses to build without it.
+  # Set here rather than as `author` in package.json so the field reads as what
+  # it is — who packages this, not who wrote it — and a GitHub noreply address
+  # so a package that may get passed around carries no real inbox.
+  maintainer: robertotucci <robertotucci@users.noreply.github.com>
+  # Electron takes its Wayland app_id / X11 WM_CLASS from `desktopName` in
+  # package.json; this makes electron-builder name the generated entry to match
+  # and write the same value into StartupWMClass. Without the pair, a KDE or
+  # GNOME Wayland session cannot tie the running window to the .desktop entry —
+  # and since the entry is where the icon lives on Wayland, the taskbar falls
+  # back to a generic placeholder no matter what the window itself carries.
+  syncDesktopName: true
+  # A directory, so every hicolor size ships rendered from resources/icon.svg
+  # rather than downscaled from one large PNG. It lives beside the app rather
+  # than in buildResources because src/main/index.ts imports one of these files
+  # for the window icon — one source, two consumers.
+  icon: resources/icons
+  target:
+    - AppImage
+    - deb
+  category: Game
+  synopsis: Gamepad-driven couch launcher for NVIDIA GeForce NOW
+  desktop:
+    entry:
+      Name: GFN Launcher
+      Categories: Game;Network;
+npmRebuild: false

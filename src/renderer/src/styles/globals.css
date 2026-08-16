@@ -1,0 +1,197 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Self-hosted: the launcher starts at boot and must render correctly offline. */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+/*
+  The launcher only ever renders dark, so there is no light palette to carry and
+  no theme toggle. The `.dark` class still goes on <html> (see index.html): every
+  component the shadcn registry ships uses `dark:` variants, and without the
+  class those would resolve against the OS preference instead of against us.
+*/
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Stock shadcn `neutral`, dark. The shell is deliberately colourless: the only
+  saturated things on screen are the cover art and the focus ring, which is the
+  one thing that has to be findable from a sofa.
+*/
+:root {
+  /*
+    The single token the user owns. Declared here rather than only applied from
+    settings so white is already live on the first frame — the settings arrive
+    over IPC, and a launcher that flashes a different accent at every start
+    would look broken. `ACCENT_PRESETS` in @shared/theme is the other half.
+  */
+  --brand: oklch(0.985 0 0);
+
+  --radius: 0.625rem;
+
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: var(--brand);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  /*
+    Service health, and the one place the launcher spends colour on something
+    other than the accent.
+
+    A status board is the exception the rest of this palette is built to avoid:
+    the fleet is 76 datacenters, and telling "fine" from "degraded" from "down"
+    by fill and weight alone stops working somewhere past the first dozen rows.
+    So health gets a hue — but only on the dot. Labels stay neutral except where
+    something is actually wrong, which keeps the grid of cover art the most
+    saturated thing on any screen that has cover art on it.
+
+    Lightness is held at 0.72–0.80 across the set so no state reads as louder
+    than its neighbour for reasons other than its hue, and `major_outage` reuses
+    `--destructive` rather than inventing a second red.
+  */
+  --status-ok: oklch(0.76 0.15 152);
+  --status-info: oklch(0.74 0.12 240);
+  --status-warn: oklch(0.8 0.14 85);
+  --status-alert: oklch(0.75 0.16 55);
+
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: var(--brand);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-status-ok: var(--status-ok);
+  --color-status-info: var(--status-info);
+  --color-status-warn: var(--status-warn);
+  --color-status-alert: var(--status-alert);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+
+  /* Work of unknown length — the catalog is thousands of titles behind a
+     paginated API, so there is no honest percentage to show. */
+  --animate-sweep: sweep 1.4s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-130%);
+  }
+  to {
+    transform: translateX(460%);
+  }
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before {
+    @apply border-border;
+  }
+
+  /*
+    Everything downstream is sized in rem, so the whole interface scales from
+    this one line. Geist has no width axis to carry hierarchy the way Archivo
+    did, so the type has to be plainly bigger instead: three metres from a TV,
+    a 16px body is a rumour.
+
+    Fixed px, not `clamp(16px, 1.05vw, 20px)` as it once was. Interface size is
+    now a setting, applied as `webContents.setZoomFactor` in `main/uiScale.ts`,
+    and zoom shrinks the CSS viewport by exactly the factor it magnifies by —
+    so any vw term is invariant under it. The old clamp cancelled the user's
+    choice outright between 100% and ~130%, leaving the type the one thing on
+    screen that refused to grow. Adapting to the window is the zoom control's
+    job now, and it is the user's to turn.
+  */
+  html {
+    font-size: 20px;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* Couch UI: nothing here is a document. */
+    overflow: hidden;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* The gamepad is the cursor. A stray pointer must never become the focus
+     model — see `focus-ring` below for the thing that replaces the outline. */
+  :focus,
+  :focus-visible {
+    outline: none;
+  }
+
+  ::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+  Focus is virtual: `SpatialFocus` tracks a `focusedId` in React state and never
+  calls `element.focus()`, so `:focus-visible` never matches and shadcn's own
+  `focus-visible:` variants are dead here. Every focusable applies this from the
+  `focused` boolean instead.
+
+  Thicker than shadcn's default hairline, for the same reason the root font-size
+  is bumped: this ring is the only cursor in the room.
+
+  It draws *outside* its element, so every scroll container holding focusables
+  needs padding and matching `scroll-p-*` — otherwise the ring is clipped at the
+  edge of the viewport, and `scrollIntoView` parks the element flush against it.
+*/
+@utility focus-ring {
+  @apply ring-ring ring-offset-background z-10 ring-2 ring-offset-2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

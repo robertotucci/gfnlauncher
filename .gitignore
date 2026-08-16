@@ -1,0 +1,19 @@
+node_modules/
+out/
+dist/
+release/
+.vite/
+.vitest/
+*.log
+.DS_Store
+.env
+.env.local
+
+# Flatpak build artefacts. `.flatpak-builder/` is the tool's own cache and runs
+# to gigabytes; `build-dir/` and `repo/` are what a local `npm run flatpak:build`
+# leaves behind. The committed side of Flatpak packaging is flatpak/ only.
+.flatpak-builder/
+build-dir/
+repo/
+*.flatpak
+flatpak/node_modules/
