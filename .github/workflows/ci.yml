@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MANIFEST: flatpak/io.github.robertotucci.GfnLauncher.yml
+
+jobs:
+  check:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      # Not a redundant `npm run build` — this is the only step that proves the
+      # renderer, main and preload bundles still come out, which typecheck alone
+      # does not.
+      - run: npm run build
+
+  flatpak:
+    name: Flatpak build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The official flatpak-github-actions container is not used here: it has
+      # no freedesktop 25.08 image (24.08 is its newest), and 24.08 is at the
+      # end of its support window. Installing the toolchain on the runner keeps
+      # the runtime current and makes CI run the same command a developer runs
+      # locally — `npm run flatpak:build` — rather than a parallel one that can
+      # drift.
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream
+          # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor,
+          # which is exactly what bubblewrap needs to build a sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Add Flathub
+        run: flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      # ~1.5 GB of SDK and runtime. Keyed on the manifest, since that is what
+      # names the versions.
+      - name: Cache Flatpak installation
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/flatpak
+          key: flatpak-runtime-${{ hashFiles(env.MANIFEST) }}
+          restore-keys: flatpak-runtime-
+
+      - name: Install runtime and SDK
+        run: |
+          flatpak install --user -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.electronjs.Electron2.BaseApp//25.08 \
+            org.freedesktop.Sdk.Extension.node24//25.08
+
+      # The npm tarballs and the Electron zip, ~400 MB. Keyed on the generated
+      # sources, which is the file that decides what gets downloaded.
+      - name: Cache build sources
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder/downloads
+          key: flatpak-downloads-${{ hashFiles('flatpak/generated-sources.json') }}
+          restore-keys: flatpak-downloads-
+
+      # This is the job that earns its place. The Flatpak build runs with no
+      # network, so every dependency has to be declared in
+      # generated-sources.json — which means any change to package-lock.json
+      # breaks it silently, and without this it would only be discovered while
+      # cutting a release.
+      - name: Build
+        run: |
+          flatpak-builder --force-clean --user --disable-rofiles-fuse \
+            --repo=repo --ccache \
+            build-dir "$MANIFEST"
+
+      - name: Validate AppStream metadata
+        run: appstreamcli validate --explain build-dir/files/share/metainfo/*.metainfo.xml
+
+      - name: Bundle
+        run: |
+          flatpak build-bundle repo gfn-launcher.flatpak \
+            io.github.robertotucci.GfnLauncher --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gfn-launcher-flatpak
+          path: gfn-launcher.flatpak
+          retention-days: 14

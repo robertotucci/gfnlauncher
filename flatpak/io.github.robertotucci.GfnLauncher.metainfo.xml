@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Roberto Tucci -->
+<component type="desktop-application">
+  <id>io.github.robertotucci.GfnLauncher</id>
+
+  <name>GFN Launcher</name>
+  <summary>Couch launcher for NVIDIA GeForce NOW</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+
+  <developer id="io.github.robertotucci">
+    <name>Roberto Tucci</name>
+  </developer>
+
+  <description>
+    <p>
+      A console-like launcher for NVIDIA GeForce NOW. It runs fullscreen on a TV, is
+      driven entirely by gamepad, starts with your desktop session, and hands games
+      off to the GeForce NOW client you already have installed.
+    </p>
+    <p>
+      Reference points are the PS5 dashboard and Steam Big Picture, not a web app
+      scaled up: a 10-foot interface you drive from three metres away, where the
+      cover art is the brightest thing on screen and the launcher's own chrome gets
+      out of the way.
+    </p>
+    <p>What it does:</p>
+    <ul>
+      <li>Browses the full GeForce NOW catalogue with genre and ray-tracing filters</li>
+      <li>Shows your library and what you own, once you sign in</li>
+      <li>Searches from an on-screen alphabetical keyboard, because on a pad you scan for a letter rather than reach for it</li>
+      <li>Keeps a chronology of what you played</li>
+      <li>Reports GeForce NOW service health, opening with your own datacenter rather than a list of seventy-six</li>
+      <li>Ends the session — sleep, restart, or turn off — because the launcher is the last thing on screen before the TV goes off</li>
+    </ul>
+    <p>
+      Requires the official GeForce NOW Flatpak, com.nvidia.geforcenow. An account is
+      not needed to browse or to launch: the deep link goes to the local client.
+      Signing in adds your library and ownership.
+    </p>
+    <p>
+      This is an unofficial, independent project, not affiliated with or endorsed by
+      NVIDIA.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.robertotucci.GfnLauncher.desktop</launchable>
+
+  <url type="homepage">https://github.com/robertotucci/gfnlauncher</url>
+  <url type="bugtracker">https://github.com/robertotucci/gfnlauncher/issues</url>
+  <url type="vcs-browser">https://github.com/robertotucci/gfnlauncher</url>
+  <url type="contribute">https://github.com/robertotucci/gfnlauncher/blob/main/CONTRIBUTING.md</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/docs/screenshots/grid.png</image>
+      <caption>The catalogue grid, with the focused tile carrying the only cursor on screen</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/docs/screenshots/details.png</image>
+      <caption>A game's details, with the cursor already on Play</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/docs/screenshots/search.png</image>
+      <caption>Search, driven from an on-screen alphabetical keyboard</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/docs/screenshots/status.png</image>
+      <caption>Service health, opening with your own datacenter</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/docs/screenshots/settings.png</image>
+      <caption>Settings, including accent colour and interface scale</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Game</category>
+    <category>Network</category>
+  </categories>
+
+  <keywords>
+    <keyword>GeForce NOW</keyword>
+    <keyword>cloud gaming</keyword>
+    <keyword>gamepad</keyword>
+    <keyword>controller</keyword>
+    <keyword>couch</keyword>
+    <keyword>TV</keyword>
+  </keywords>
+
+  <supports>
+    <control>gamepad</control>
+  </supports>
+  <recommends>
+    <control>gamepad</control>
+    <display_length compare="ge">1024</display_length>
+  </recommends>
+
+  <branding>
+    <color type="primary" scheme_preference="dark">#08090c</color>
+    <color type="primary" scheme_preference="light">#d7dade</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-08-16">
+      <description>
+        <p>First public release.</p>
+        <ul>
+          <li>Gamepad-only 10-foot interface with spatial focus navigation, recognising Xbox, PlayStation and 8BitDo pads and redrawing its button legend to match</li>
+          <li>The full GeForce NOW catalogue, with genre filtering, a ray-tracing filter and server-side search</li>
+          <li>Your library and store ownership once signed in, including which store's edition launches</li>
+          <li>A details panel with description, screenshots, supported controls and a QR code for the store page</li>
+          <li>Service health, opening with your own datacenter</li>
+          <li>Accent colour, interface scale, autostart and a power menu</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0</url>
+    </release>
+  </releases>
+</component>

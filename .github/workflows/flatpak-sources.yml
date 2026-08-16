@@ -1,0 +1,62 @@
+name: Flatpak sources
+
+# The Flatpak build runs with no network: every npm tarball and the Electron
+# binary have to be declared, with checksums, in flatpak/generated-sources.json.
+# That file is derived from package-lock.json, and the way it goes wrong is
+# quiet — the Flatpak keeps building happily against the dependency tree of two
+# commits ago, and nothing in a normal diff shows it.
+#
+# So it is regenerated here rather than remembered. On a lockfile change this
+# opens a pull request; on a schedule it catches the case where the generator
+# itself changed what it emits.
+
+on:
+  push:
+    branches: [main]
+    paths: ['package-lock.json']
+  schedule:
+    # Mondays, early. Nothing depends on the hour.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: Regenerate generated-sources.json
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: ./scripts/generate-flatpak-sources.sh
+
+      - name: Open a pull request if anything moved
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/flatpak-sources
+          title: 'chore: regenerate Flatpak offline sources'
+          commit-message: |
+            chore: regenerate Flatpak offline sources
+
+            Derived from package-lock.json by scripts/generate-flatpak-sources.sh.
+            The Flatpak build has no network, so this file is the only thing
+            that decides which dependency bytes reach it.
+          body: |
+            `flatpak/generated-sources.json` no longer matches `package-lock.json`.
+
+            The Flatpak build runs offline, so an out-of-date sources file means
+            the Flatpak is built against a different dependency tree from the one
+            `npm ci` produces everywhere else — or fails outright on a package
+            that is not in it.
+
+            The CI Flatpak job on this pull request is the check that matters.
+          labels: packaging
+          delete-branch: true

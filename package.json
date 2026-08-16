@@ -4,13 +4,13 @@
   "description": "Console-like, gamepad-driven launcher for NVIDIA GeForce NOW",
   "license": "AGPL-3.0-only",
   "author": "Roberto Tucci",
-  "homepage": "https://github.com/robertotucci/gfn-launcher",
+  "homepage": "https://github.com/robertotucci/gfnlauncher",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/robertotucci/gfn-launcher.git"
+    "url": "git+https://github.com/robertotucci/gfnlauncher.git"
   },
   "bugs": {
-    "url": "https://github.com/robertotucci/gfn-launcher/issues"
+    "url": "https://github.com/robertotucci/gfnlauncher/issues"
   },
   "keywords": [
     "geforce-now",
@@ -37,8 +37,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "flatpak:sources": "node scripts/sync-electron-source.mjs",
-    "flatpak:build": "flatpak run org.flatpak.Builder --force-clean --user --install --install-deps-from=flathub build-dir flatpak/io.github.robertotucci.GfnLauncher.yml"
+    "flatpak:build": "flatpak run org.flatpak.Builder --force-clean --user --install --install-deps-from=flathub build-dir flatpak/io.github.robertotucci.GfnLauncher.yml",
+    "flatpak:sources": "./scripts/generate-flatpak-sources.sh",
+    "flatpak:lint": "flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest flatpak/io.github.robertotucci.GfnLauncher.yml"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

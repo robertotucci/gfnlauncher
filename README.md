@@ -48,7 +48,7 @@ chmod +x GFN-Launcher-<version>.AppImage
 sudo apt install ./gfn-launcher_<version>_amd64.deb
 ```
 
-All artefacts are attached to each [release](https://github.com/robertotucci/gfn-launcher/releases). x86_64 only, because the GeForce NOW client is x86_64 only — an arm64 build would be a launcher that cannot launch anything.
+All artefacts are attached to each [release](https://github.com/robertotucci/gfnlauncher/releases). x86_64 only, because the GeForce NOW client is x86_64 only — an arm64 build would be a launcher that cannot launch anything.
 
 ## Controls
 
@@ -112,14 +112,17 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 
 | Permission | What needs it |
 | --- | --- |
-| `--talk-name=org.freedesktop.Flatpak` | Running `flatpak` on the host — to launch the GeForce NOW client with a deep link, and to stop a running one first, because a client already up silently swallows the link. Also `systemctl` for the power menu |
+| `--talk-name=org.freedesktop.Flatpak` | Running commands on the host: `flatpak` to launch the GeForce NOW client with a deep link and to stop a running one first, `systemctl` for the power menu, and writing the autostart entry into your real `~/.config/autostart` |
 | `--device=all` | Reading the gamepad, and the GPU |
-| `--filesystem=xdg-config/autostart:create` | The "start with my session" toggle writes a standard XDG autostart entry |
 | `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
 | `--share=network` | The catalog, sign-in, and the status page |
+| `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc` | Drawing a window |
+| `--socket=pulseaudio` | Sound, for the web-player fallback |
 
 **`--talk-name=org.freedesktop.Flatpak` is effectively an exit from the sandbox**, and there is no way around it for an app whose entire purpose is to drive another Flatpak. There is no portal for "launch this Flatpak with these arguments" — the deep link is an argv, not a URI scheme — and stopping a running client needs the host too. If that trade is not one you want to make, the AppImage does the same things with no sandbox at all, which is at least honest about it.
+
+It is also the *only* host permission asked for. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two.
 
 Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the first one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed.
 

@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MANIFEST: flatpak/io.github.robertotucci.GfnLauncher.yml
+  APP_ID: io.github.robertotucci.GfnLauncher
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      # A tag whose version does not match package.json produces artefacts named
+      # after one number and a changelog entry under another, which is only ever
+      # discovered by whoever downloads them.
+      - name: Tag matches package.json
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          packaged="v$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$packaged" ]; then
+            echo "::error::tag $tag does not match package.json ($packaged)"
+            exit 1
+          fi
+
+      - name: Changelog has an entry for this release
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          grep -q "^## \[$version\]" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## [$version]' section"
+            exit 1
+          }
+
+  native:
+    name: AppImage and deb
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build:linux
+        env:
+          # electron-builder would otherwise look for a GitHub token and try to
+          # publish on its own; releasing is this workflow's job, not its.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: |
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak bundle
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Add Flathub
+        run: flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install runtime and SDK
+        run: |
+          flatpak install --user -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.electronjs.Electron2.BaseApp//25.08 \
+            org.freedesktop.Sdk.Extension.node24//25.08
+
+      - name: Build
+        run: |
+          flatpak-builder --force-clean --user --disable-rofiles-fuse \
+            --repo=repo build-dir "$MANIFEST"
+
+      - name: Validate AppStream metadata
+        run: appstreamcli validate --explain build-dir/files/share/metainfo/*.metainfo.xml
+
+      - name: Bundle
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          flatpak build-bundle repo "GfnLauncher-${version}.flatpak" "$APP_ID" \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: '*.flatpak'
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [native, flatpak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # The changelog is the single source for release notes, the AppStream
+      # <releases> block, and this body — written once, read three times.
+      - name: Extract release notes
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { inside = 1; next }
+            inside && /^## \[/      { exit }
+            inside                  { print }
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo '## Install'
+            echo
+            echo '**Flatpak — recommended, any distribution:**'
+            echo
+            echo '```bash'
+            echo "flatpak install --user ./GfnLauncher-${version}.flatpak"
+            echo '```'
+            echo
+            echo 'Requires the official GeForce NOW Flatpak (`com.nvidia.geforcenow`) and a gamepad.'
+            echo 'See the [README](https://github.com/robertotucci/gfnlauncher#install) for the AppImage and .deb, and for what sandbox permissions the Flatpak asks for and why.'
+          } >> notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          body_path: notes.md
+          files: artifacts/*
+          fail_on_unmatched_files: true

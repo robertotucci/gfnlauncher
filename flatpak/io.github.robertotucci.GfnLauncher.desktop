@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=GFN Launcher
+GenericName=GeForce NOW Launcher
+Comment=Gamepad-driven couch launcher for NVIDIA GeForce NOW
+Exec=gfn-launcher
+Icon=io.github.robertotucci.GfnLauncher
+Terminal=false
+Categories=Game;Network;
+Keywords=geforce;now;gfn;nvidia;cloud;gaming;gamepad;controller;couch;tv;
+# Must match the WM_CLASS the window actually reports, or the desktop cannot tie
+# the running launcher back to this entry — and the entry is where the icon
+# lives, so a mismatch shows a generic placeholder in the taskbar no matter what
+# the window itself carries. The wrapper in /app/bin passes --class with this
+# exact value rather than leaving it to be derived, so the two cannot drift.
+StartupWMClass=io.github.robertotucci.GfnLauncher
+StartupNotify=true

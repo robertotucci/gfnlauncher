@@ -1,5 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { access, mkdir, rm, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { promisify } from 'node:util'
 
 /**
@@ -209,6 +211,89 @@ export async function hostExecFile(
   // must not also be set on flatpak-spawn itself, which does not forward it.
   const result = await run(outer, outerArgs, sandboxed ? {} : { env: { ...process.env, ...env } })
   return { stdout: String(result.stdout), stderr: String(result.stderr) }
+}
+
+/**
+ * Filesystem operations that have to land on the *host* rather than in our
+ * private per-app directory.
+ *
+ * There is exactly one caller: the XDG autostart entry, which is read by the
+ * session at login and therefore has to exist in the user's real
+ * `~/.config/autostart`. Two ways to reach it, and this is the cheaper one:
+ *
+ * - `--filesystem=xdg-config/autostart:create` mounts the real directory into
+ *   the sandbox, and would be a *second* permission to justify to Flathub —
+ *   one its linter already flags as unnecessary, because the Background portal
+ *   exists.
+ * - `flatpak-spawn` reuses the host access we cannot avoid having anyway, since
+ *   nothing else can start the GeForce NOW client.
+ *
+ * (The Background portal would be better than either, and is not reachable
+ * from here: it is a D-Bus request/response pair over the session bus, Electron
+ * exposes no binding for it, and a native D-Bus module is ruled out by
+ * `npmRebuild: false`. Worth revisiting if Electron ever wraps it.)
+ *
+ * Outside a sandbox these are the plain `fs/promises` calls they look like.
+ */
+export async function hostFileExists(path: string): Promise<boolean> {
+  if (!IS_SANDBOXED) {
+    try {
+      await access(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  try {
+    await hostExecFile('test', ['-f', path])
+    return true
+  } catch {
+    // `test` exits 1 for "no", which arrives as a rejection. Every other reason
+    // to fail — no host access, no `test` — also means we cannot claim it is
+    // there, so they collapse to the same answer.
+    return false
+  }
+}
+
+/** Writes `contents` to a host path, creating the parent directory. */
+export async function hostWriteFile(path: string, contents: string): Promise<void> {
+  if (!IS_SANDBOXED) {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, contents, 'utf8')
+    return
+  }
+
+  await hostExecFile('mkdir', ['-p', dirname(path)])
+  // Through stdin rather than as an argument: the payload is multi-line and
+  // contains characters a shell would reinterpret, and `tee` needs no shell at
+  // all — `flatpak-spawn` execs it directly.
+  await new Promise<void>((resolve, reject) => {
+    const [outer, outerArgs] = hostCommand('tee', [path])
+    const child = spawn(outer, outerArgs, { stdio: ['pipe', 'ignore', 'pipe'] })
+
+    let stderr = ''
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk)
+    })
+    child.once('error', reject)
+    child.once('close', (code) =>
+      code === 0
+        ? resolve()
+        : reject(Object.assign(new Error(`tee exited ${code}`), { stderr, code }))
+    )
+
+    child.stdin?.end(contents, 'utf8')
+  })
+}
+
+/** Removes a host path, succeeding when it was already gone. */
+export async function hostRemoveFile(path: string): Promise<void> {
+  if (!IS_SANDBOXED) {
+    await rm(path, { force: true })
+    return
+  }
+  await hostExecFile('rm', ['-f', path])
 }
 
 /** Starts a host command without waiting for it. See `spawnFlatpak` in gfn/launch.ts. */

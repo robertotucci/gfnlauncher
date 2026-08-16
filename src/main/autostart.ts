@@ -1,8 +1,7 @@
-import { mkdir, writeFile, rm, access } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
-import { FLATPAK_ID, IS_SANDBOXED } from './host'
+import { FLATPAK_ID, IS_SANDBOXED, hostFileExists, hostRemoveFile, hostWriteFile } from './host'
 
 /**
  * Autostart via the XDG spec (~/.config/autostart), rather than Electron's
@@ -21,10 +20,8 @@ const ENTRY_NAME = 'gfn-launcher.desktop'
  *
  * **`XDG_CONFIG_HOME` is the wrong answer inside a Flatpak.** The runtime points
  * it at `~/.var/app/<id>/config`, which is ours alone and which nothing at login
- * ever reads — so honouring it would write a file that works nowhere. The real
- * `~/.config/autostart` is bind-mounted at its true path by
- * `--filesystem=xdg-config/autostart:create`, so the literal path is the
- * portable one here and the environment variable is the trap.
+ * ever reads — so honouring it would write a file that works nowhere, without
+ * failing. The path below is the host's, reached through `host.ts`.
  *
  * Outside a sandbox `XDG_CONFIG_HOME` still wins, because there it means what it
  * says.
@@ -106,26 +103,17 @@ export function buildDesktopEntry({
 }
 
 export async function isAutostartEnabled(): Promise<boolean> {
-  try {
-    await access(entryPath())
-    return true
-  } catch {
-    return false
-  }
+  return hostFileExists(entryPath())
 }
 
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!enabled) {
-    await rm(entryPath(), { force: true })
+    await hostRemoveFile(entryPath())
     return
   }
 
-  const contents = buildDesktopEntry({
-    exec: execCommand(),
-    icon: iconName(),
-    flatpakId: FLATPAK_ID
-  })
-
-  await mkdir(autostartDir(), { recursive: true })
-  await writeFile(entryPath(), contents, 'utf8')
+  await hostWriteFile(
+    entryPath(),
+    buildDesktopEntry({ exec: execCommand(), icon: iconName(), flatpakId: FLATPAK_ID })
+  )
 }

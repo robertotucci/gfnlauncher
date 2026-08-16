@@ -42,6 +42,45 @@ npx vitest run -t 'holds the column'          # one test by name
 
 `npx shadcn@latest add <component>` lands in `src/renderer/src/components/ui/` (excluded from lint).
 
+## Building the Flatpak
+
+The Flatpak is the primary distribution, and it is the build most likely to break in ways the others do not — it runs **offline**, so every dependency has to be declared up front, and it runs **sandboxed**, so anything that touches the host goes through `src/main/host.ts`.
+
+One-time setup, no `sudo`, works on any distribution:
+
+```bash
+flatpak install --user flathub org.flatpak.Builder
+flatpak install --user flathub \
+  org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 \
+  org.electronjs.Electron2.BaseApp//25.08 org.freedesktop.Sdk.Extension.node24//25.08
+```
+
+Then:
+
+```bash
+npm run flatpak:build     # build and install locally, ~4 minutes cold
+npm run flatpak:lint      # flatpak-builder-lint on the manifest
+flatpak run io.github.robertotucci.GfnLauncher
+```
+
+**After changing any dependency, regenerate the offline sources:**
+
+```bash
+npm run flatpak:sources   # rewrites flatpak/generated-sources.json from package-lock.json
+```
+
+Skipping that does not fail loudly. The Flatpak keeps building against the dependency tree the sources file describes, which is the one from whenever it was last regenerated. CI runs the same script and opens a pull request when the two disagree, and the CI Flatpak job is what actually catches it.
+
+### Things that cost an afternoon to rediscover
+
+All of these were hit while getting the first build green, and all of them fail in ways that do not point at the cause:
+
+- **`--config.electronDist` is what keeps the build offline, not the download cache.** Putting the Electron zip in `$XDG_CACHE_HOME/electron` at exactly the path electron-builder writes to is not enough: `@electron/get` re-fetches `SHASUMS256.txt` to validate it on every run, and that fetch is not cached. Pointed at a *directory* containing `electron-v<ver>-linux-x64.zip`, electron-builder extracts it in-process and never opens a socket.
+- **A YAML folded scalar (`>-`) keeps the newline before a more-indented continuation line.** A `build-command` split across lines for readability becomes two commands. Keep each one on a single physical line.
+- **The scalable SVG icon must not be installed.** `appstreamcli compose`, which flatpak-builder runs at the end of every build, cannot rasterise SVG inside `org.flatpak.Builder` and fails the whole build with `icon-file-read-error`. The PNG set is rendered from that SVG anyway.
+- **`flatpak build-export` refuses icons larger than 512×512.** The 1024px PNG ships in the `.deb` and nowhere else.
+- **Granting only `--socket=x11` does not fall back gracefully.** Electron 43 defaults its Ozone hint to `auto`, sees `WAYLAND_DISPLAY`, fails to find a Wayland socket, and *exits*. Both sockets are granted.
+
 ## Conventions
 
 **Every constructed argv is a pure function with a test.** `buildPowerArgv`, `buildLaunchArgv`, `buildUrlRoute`, `buildOpenArgv`, `hostCommand`, `buildDesktopEntry`. The reason is not purity for its own sake: these produce commands that suspend a machine, kill a process, or write a file that runs at login, and the test suite must be able to assert the exact string without ever executing it. When you add another one, follow the pattern.
