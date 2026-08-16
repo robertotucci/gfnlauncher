@@ -8,7 +8,7 @@ Release notes on GitHub and the AppStream `<releases>` block are both generated 
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-08-16
+## [0.1.0] - 2026-08-17
 
 First public release.
 
