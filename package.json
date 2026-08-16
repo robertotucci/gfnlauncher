@@ -39,7 +39,8 @@
     "test:watch": "vitest",
     "flatpak:build": "flatpak run org.flatpak.Builder --force-clean --user --install --install-deps-from=flathub build-dir flatpak/io.github.robertotucci.GfnLauncher.yml",
     "flatpak:sources": "./scripts/generate-flatpak-sources.sh",
-    "flatpak:lint": "flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest flatpak/io.github.robertotucci.GfnLauncher.yml"
+    "flatpak:lint": "flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest flatpak/io.github.robertotucci.GfnLauncher.yml",
+    "flatpak:validate": "flatpak run --share=network --filesystem=\"$PWD\" --command=appstreamcli org.freedesktop.Sdk//25.08 validate --explain flatpak/io.github.robertotucci.GfnLauncher.metainfo.xml"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

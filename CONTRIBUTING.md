@@ -60,8 +60,11 @@ Then:
 ```bash
 npm run flatpak:build     # build and install locally, ~4 minutes cold
 npm run flatpak:lint      # flatpak-builder-lint on the manifest
+npm run flatpak:validate  # appstreamcli on the metainfo — CI fails on its warnings
 flatpak run io.github.robertotucci.GfnLauncher
 ```
+
+`flatpak:validate` needs network: `appstreamcli` fetches every screenshot URL to check it resolves. Run it offline and you get five spurious `screenshot-image-not-found` warnings.
 
 **After changing any dependency, regenerate the offline sources:**
 

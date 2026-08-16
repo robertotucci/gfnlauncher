@@ -89,13 +89,22 @@
     <keyword>TV</keyword>
   </keywords>
 
-  <supports>
-    <control>gamepad</control>
-  </supports>
+  <!--
+    A relation item may appear under one relation only; naming gamepad in both
+    supports and recommends is a validation failure, not a stronger hint.
+
+    `recommends` rather than `requires`: a gamepad is what this is for, but
+    requiring one would hide the app from anyone browsing a software centre
+    without a pad plugged in, and the keyboard mirror is real — it is also the
+    only way to complete NVIDIA's sign-in page, which is not gamepad-navigable.
+  -->
   <recommends>
     <control>gamepad</control>
     <display_length compare="ge">1024</display_length>
   </recommends>
+  <supports>
+    <control>keyboard</control>
+  </supports>
 
   <branding>
     <color type="primary" scheme_preference="dark">#08090c</color>
