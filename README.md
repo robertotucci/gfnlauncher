@@ -2,13 +2,31 @@
 
 A couch launcher for NVIDIA GeForce NOW. Fullscreen, gamepad-only, starts with your desktop session, and hands games off to the native GeForce NOW client.
 
-Reference points are the PS5 dashboard and Steam Big Picture, not a web app scaled up: a 10-foot interface you drive from three metres away, where the cover art is the brightest thing on screen and the launcher's own chrome gets out of the way.
+Built for the television rather than the desktop: a 10-foot interface you drive from three metres away, where the cover art is the brightest thing on screen and the launcher's own chrome gets out of the way.
 
 Linux only.
 
 ![The catalogue grid: a hero band showing the focused title above a strip of genre filters and a grid of cover art, with the focused tile carrying the only cursor on screen](docs/screenshots/grid.png)
 
 The whole GeForce NOW catalogue — 5 889 titles the day this was taken. The ring around one cover is the cursor, and the strip above it is every genre with its count. More views in [docs/screenshots](docs/screenshots).
+
+## Support the project
+
+This launcher is developed on a best-effort basis, in time taken from elsewhere and at my own expense. It is free and always will be, and there is no paid tier waiting behind it.
+
+If it earned a place on your television, a donation is the most direct encouragement to keep working on it and to keep making it better.
+
+<p align="center">
+  <a href="https://www.paypal.com/donate/?hosted_button_id=6TJMUEWLPE95Y">
+    <img src="docs/donate-qr.png" alt="QR code linking to the PayPal donation page" width="200">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://www.paypal.com/donate/?hosted_button_id=6TJMUEWLPE95Y"><strong>Donate with PayPal</strong></a>
+  <br>
+  <sub>Or point a phone camera at the code above.</sub>
+</p>
 
 ## Requirements
 

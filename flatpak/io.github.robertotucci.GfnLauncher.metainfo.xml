@@ -20,10 +20,9 @@
       off to the GeForce NOW client you already have installed.
     </p>
     <p>
-      Reference points are the PS5 dashboard and Steam Big Picture, not a web app
-      scaled up: a 10-foot interface you drive from three metres away, where the
-      cover art is the brightest thing on screen and the launcher's own chrome gets
-      out of the way.
+      Built for the television rather than the desktop: a 10-foot interface you
+      drive from three metres away, where the cover art is the brightest thing on
+      screen and the launcher's own chrome gets out of the way.
     </p>
     <p>What it does:</p>
     <ul>
@@ -51,6 +50,8 @@
   <url type="bugtracker">https://github.com/robertotucci/gfnlauncher/issues</url>
   <url type="vcs-browser">https://github.com/robertotucci/gfnlauncher</url>
   <url type="contribute">https://github.com/robertotucci/gfnlauncher/blob/main/CONTRIBUTING.md</url>
+  <!-- Software centres render this as a Donate button on the app's page. -->
+  <url type="donation">https://www.paypal.com/donate/?hosted_button_id=6TJMUEWLPE95Y</url>
 
   <screenshots>
     <screenshot type="default">

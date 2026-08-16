@@ -248,7 +248,7 @@ The **Yours** badge on the user's own region is `bg-primary` — the accent, on 
 
 ## Design
 
-Console-like, not desktop-like. Reference points are the PS5 and Steam Big Picture, not a web app scaled up.
+Console-like, not desktop-like: a television interface in its own right, rather than a web app scaled up.
 
 **The shell is colourless so the games are not.** Stock shadcn `neutral` dark, and the only chromatic thing in the entire chrome is the accent — which paints the focus ring, the primary button, the RTX filter, and nothing else. Every cover in the grid is therefore the most saturated object on screen, which is the right answer for a screen whose whole job is showing you games. A second colour to mean something is not the tool; use weight, a border, or an icon.
 
