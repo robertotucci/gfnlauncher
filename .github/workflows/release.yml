@@ -74,11 +74,13 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # `--publish never` lives in the npm script rather than here: it is not a
+      # CI concern. electron-builder publishes implicitly whenever HEAD carries
+      # a git tag, so anyone running `npm run build:linux` with a release tag
+      # checked out gets the same "GitHub Personal Access Token is not set"
+      # failure — after building both artefacts, which makes it look like a
+      # packaging problem rather than what it is.
       - run: npm run build:linux
-        env:
-          # electron-builder would otherwise look for a GitHub token and try to
-          # publish on its own; releasing is this workflow's job, not its.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - uses: actions/upload-artifact@v4
         with:
