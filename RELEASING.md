@@ -59,4 +59,16 @@ The `.flatpak` bundle in each release installs the same build, but does not upda
 
 Submission is a pull request against [`flathub/flathub`](https://github.com/flathub/flathub) on the `new-pr` branch, carrying the manifest with its `type: dir` source replaced by a git source pinned to the release tag. After acceptance, updates are a pull request against the app's own Flathub repository, and the buildbot publishes.
 
+```bash
+node scripts/make-flathub-manifest.mjs
+flatpak run --filesystem="$PWD" --command=flatpak-builder-lint org.flatpak.Builder \
+  manifest release/flathub/io.github.robertotucci.GfnLauncher.yml
+```
+
+That writes three files into `release/flathub/`, which are the three the pull request carries at the repository root: the manifest, `flathub.json` — where `only-arches` lives, because flatpak-builder rejects it at manifest top level — and `generated-sources.json`, which the manifest includes by a path relative to itself and therefore has to travel beside it. The tag has to be pushed first: the script checks it against `origin` rather than trusting a local one, because a tag that exists only on this disk builds here and 404s on the buildbot.
+
+**The pull request template's checklist is not optional.** A bot closes the submission within the minute if a single box is unticked, and one of the boxes is a video of the application running from the Flatpak. It also asks you to comment rather than open a replacement, so a closed submission is recovered by completing the description and saying so underneath, not by starting again.
+
+The lint above is expected to fail, with four errors — `finish-args-flatpak-spawn-access` and the three `com.nvidia.geforcenow` folder permissions. They are not defects to fix; they are what the launcher is, and Flathub grants them as exceptions during review. The pull request has to argue each one, and the arguments are the comments beside the permissions in the manifest, which is why the swap above preserves them.
+
 Expect the review to ask about `--talk-name=org.freedesktop.Flatpak`. The answer is in the manifest beside the permission: there is no portal for "run this Flatpak with these arguments", the GeForce NOW deep link is an argv rather than a URI scheme, and stopping an already-running client — which is not optional, because a running client silently swallows the link — needs the host as well. It is also the only host permission asked for; the autostart entry deliberately goes through it rather than adding a second.

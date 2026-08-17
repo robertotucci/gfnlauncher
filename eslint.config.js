@@ -30,5 +30,17 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
       ]
     }
+  },
+  {
+    // The packaging scripts, which are Node ESM rather than TypeScript. The
+    // block above names only .ts and .tsx, so without this they are linted with
+    // no globals at all and every `process` and `console` is an undefined
+    // variable.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node }
+    }
   }
 )
