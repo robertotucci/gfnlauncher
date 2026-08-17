@@ -8,14 +8,6 @@ Release notes on GitHub and the AppStream `<releases>` block are both generated 
 
 ## [Unreleased]
 
-### Added
-
-- **Support screen.** A sixth entry on the nav rail carrying a thank-you and a QR code for the PayPal donation page, large enough to scan from a sofa. The link was already in the README and in the software-centre metadata, neither of which the person actually using the launcher ever sees. Pressing confirm opens the page in a browser on machines that have one; the code is the path that always works, and it needs no network to draw.
-
-### Fixed
-
-- **The screen no longer blanks while you are browsing with the pad.** A joystick is not an input device as far as a desktop's idle timer is concerned, so the launcher was being read from a television on its way to going dark. It now holds the display awake for five minutes after each press, and lets go as soon as it loses focus — so a launcher left on an empty room still lets the screen off, and the GeForce NOW client is left to manage its own.
-
 ## [0.1.0] - 2026-08-17
 
 First public release.
@@ -29,8 +21,10 @@ First public release.
 - **Recent**, a chronology of what you played.
 - **Status screen** that opens with *your* datacenter rather than a list of 76, read from the client's own routing configuration on disk. No account, no network needed for that half.
 - **Settings**: accent colour (seven presets), interface scale (75–175%), fullscreen, autostart, launch mode, library sync, and a row that hands the screen to the real GeForce NOW client for the things this launcher does not mirror.
+- **Support screen.** A sixth entry on the nav rail carrying a thank-you and a QR code for the PayPal donation page, large enough to scan from a sofa. The link was already in the README and in the software-centre metadata, neither of which the person actually using the launcher ever sees. Pressing confirm opens the page in a browser on machines that have one; the code is the path that always works, and it needs no network to draw.
 - **Power menu** — back to desktop, sleep, restart, turn off — because the launcher is the last thing on screen before the TV goes off.
 - **Autostart** via a standard XDG desktop entry, so the launcher comes up with the session.
+- **A screen that stays on while you are using the pad.** A joystick is not an input device as far as a desktop's idle timer is concerned, so a launcher driven from a controller would otherwise be read from a television on its way to going dark. The display is held awake for five minutes after each press and let go as soon as the window loses focus, so an empty room still gets its screen off and the GeForce NOW client is left to manage its own.
 - **Offline behaviour.** Fonts are self-hosted, the catalogue is cached on disk, and a machine that has never fetched anything still shows a usable interface.
 
 ### Packaging

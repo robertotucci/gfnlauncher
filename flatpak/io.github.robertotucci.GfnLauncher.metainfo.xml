@@ -125,6 +125,8 @@
           <li>A details panel with description, screenshots, supported controls and a QR code for the store page</li>
           <li>Service health, opening with your own datacenter</li>
           <li>Accent colour, interface scale, autostart and a power menu</li>
+          <li>A support screen carrying a QR code for the donation page, scannable from a sofa</li>
+          <li>The screen kept awake while the pad is in use, which a desktop's idle timer does not do on its own</li>
         </ul>
       </description>
       <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0</url>
