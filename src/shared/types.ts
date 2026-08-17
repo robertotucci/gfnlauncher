@@ -340,6 +340,17 @@ export interface PowerResult {
 }
 
 /**
+ * Whether handing a URL to the desktop worked.
+ *
+ * No argv to report, unlike `PowerResult`: there is no command of ours to name,
+ * only whatever the desktop decided a browser is.
+ */
+export interface OpenResult {
+  ok: boolean
+  error: string | null
+}
+
+/**
  * Health of one Statuspage component.
  *
  * Statuspage's own vocabulary, kept verbatim: it is a closed set, the launcher
@@ -571,5 +582,25 @@ export interface LauncherApi {
      * privileged: these go to logind, which decides whether to allow them.
      */
     power(action: PowerAction): Promise<PowerResult>
+    /**
+     * Opens the donation page in whatever the desktop calls a browser.
+     *
+     * Takes no argument on purpose. The URL is a constant both sides import
+     * from `@shared/donate`, so nothing crosses the bridge and there is nothing
+     * to validate — which is a stronger guarantee than validating it would be.
+     *
+     * The QR code on the Support screen is the path that always works; this is
+     * for the machine that happens to have a browser in front of it.
+     */
+    openDonation(): Promise<OpenResult>
+    /**
+     * Reports that the pad is being used, so main can keep the display awake.
+     *
+     * Fire-and-forget, and the only method here that returns nothing: there is
+     * no result and no failure to report. Throttled by `usePadWakeLock` to one
+     * call per `PAD_ACTIVITY_PING_MS`; see `@shared/wakeLock` for why a
+     * launcher has to ask for this at all.
+     */
+    padActivity(): void
   }
 }

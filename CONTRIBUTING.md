@@ -98,11 +98,12 @@ All of these were hit while getting the first build green, and all of them fail 
 
 ## Tests
 
-`npm test` runs 260-odd unit tests with vitest, no DOM environment and no Electron. Everything tested is a pure function, deliberately: parsers over third-party wire shapes (`parseZoneAssignment`, `parseVersion`, `mapApp`, `mapDetails`), the focus scorer (`scoreCandidate`), and the argv builders above.
+`npm test` runs 290-odd unit tests with vitest, no DOM environment and no Electron. Everything tested is a pure function, deliberately: parsers over third-party wire shapes (`parseZoneAssignment`, `parseVersion`, `mapApp`, `mapDetails`), the focus scorer (`scoreCandidate`), the QR path builder (`qrPath`), and the argv builders above.
 
-Two suites carry a guarantee rather than just coverage:
+Three suites carry a guarantee rather than just coverage:
 
 - **`src/main/status/zone.test.ts`** asserts the exact key set returned by `parseZoneAssignment`. Its fixture contains a session blob, because the real `sharedstorage.json` holds a live bearer token, an `idToken` JWT with the user's email, and the machine's MAC address. That assertion is what stops a widened return type from carrying secrets into the renderer. Do not relax it.
+- **`src/shared/donate.test.ts`** pins the protocol, the host and the hosted button id of `DONATION_URL`. It is the one string in the launcher that sends someone else's money somewhere, and it is encoded into a QR that nobody can proofread by eye.
 - **`src/shared/games.test.ts`** pins `launchMode` defaulting to `native`. `auto` silently degrades to a browser window when a `flatpak` probe fails transiently, which is not what a user who installed the native client asked for.
 
 ## What to check by hand
@@ -111,9 +112,11 @@ The suite cannot reach the parts that matter most. Before a release, on real har
 
 - A pad moves focus and the footer legend matches the pad in your hands (unplug it — the legend should switch to keycaps).
 - A game actually launches, and launches a *second* time in the same session (the second one exercises the kill-and-respawn path, which is the normal case and the one that used to fail silently).
+- The screen stays on through a long browse with the pad, and goes off a few minutes after you stop. Both halves matter: the second is what stops the launcher from being a program that quietly disables your blanker.
 - The Status screen names your datacenter.
 - The autostart toggle writes an entry that survives a session restart.
 - Power actions work, and a refused one shows the refusal.
+- A phone scans the code on the Support screen and lands on the right PayPal button. `zbarimg` on a screenshot proves the rendering; only a camera proves it is legible at three metres.
 
 ## Releasing
 

@@ -66,6 +66,22 @@ finish-args:
   # restore it, rather than claiming GeForce NOW is not installed.
   - --talk-name=org.freedesktop.Flatpak
 
+  # ── Keeping the screen on ───────────────────────────────────────────────────
+  # `prevent-display-sleep` (src/main/displaySleep.ts) is a D-Bus Inhibit call,
+  # and Chromium picks whichever of these the session provides: GNOME answers on
+  # org.gnome.SessionManager, KDE and Xfce on org.freedesktop.PowerManagement,
+  # and org.freedesktop.ScreenSaver is the interface the freedesktop idle
+  # specification defines. Three names rather than --socket=session-bus, which
+  # would be the whole bus for one call.
+  #
+  # This is the one permission whose absence the launcher cannot report. Inside
+  # the sandbox the blocked call still returns a valid blocker id and
+  # `isStarted()` still says true — there is nothing to detect. What the user
+  # sees is the original bug: a screen that blanks while they are browsing.
+  - --talk-name=org.gnome.SessionManager
+  - --talk-name=org.freedesktop.PowerManagement
+  - --talk-name=org.freedesktop.ScreenSaver
+
   # ── Files ───────────────────────────────────────────────────────────────────
   # Which datacenter the client is set to stream from, for the Status screen.
   # Read-only, and the parser returns six declared fields, because that file

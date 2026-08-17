@@ -46,7 +46,12 @@ const api: LauncherApi = {
   app: {
     quit: () => ipcRenderer.invoke(IPC.appQuit),
     minimize: () => ipcRenderer.invoke(IPC.appMinimize),
-    power: (action: PowerAction) => ipcRenderer.invoke(IPC.appPower, action)
+    power: (action: PowerAction) => ipcRenderer.invoke(IPC.appPower, action),
+    openDonation: () => ipcRenderer.invoke(IPC.appOpenDonation),
+    // The one channel here that does not `invoke`. There is no result to wait
+    // for and no failure the renderer could act on, and a promise nobody awaits
+    // is a worse description of that than a send.
+    padActivity: () => ipcRenderer.send(IPC.appPadActivity)
   }
 }
 

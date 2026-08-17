@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import qrcode from 'qrcode-generator'
+import { qrPath } from '@/lib/qr'
 
 /**
  * A store page as something a person on a sofa can actually reach.
@@ -14,23 +14,7 @@ import qrcode from 'qrcode-generator'
  * being baked into an image.
  */
 export function StoreQr({ url, label }: { url: string; label: string }): ReactNode {
-  const path = useMemo(() => {
-    // Type 0 lets the encoder pick the smallest version that fits; L is the
-    // lowest error correction, which keeps the module count — and so the
-    // printed square — as coarse and as scannable across a room as possible.
-    const qr = qrcode(0, 'L')
-    qr.addData(url)
-    qr.make()
-
-    const count = qr.getModuleCount()
-    let d = ''
-    for (let row = 0; row < count; row += 1) {
-      for (let column = 0; column < count; column += 1) {
-        if (qr.isDark(row, column)) d += `M${column} ${row}h1v1h-1z`
-      }
-    }
-    return { d, count }
-  }, [url])
+  const path = useMemo(() => qrPath(url), [url])
 
   return (
     <div className="flex shrink-0 flex-col items-center gap-1.5">

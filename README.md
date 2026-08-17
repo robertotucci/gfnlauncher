@@ -121,7 +121,7 @@ Open **Settings** (Y) and choose **Sign in to GeForce NOW**. NVIDIA's own sign-i
 
 Two honest caveats:
 
-- **Sign-in needs a mouse and keyboard.** NVIDIA's login page is not gamepad-navigable. Everything after it is.
+- **Sign-in needs a mouse and keyboard.** NVIDIA's login page is not gamepad-navigable. Everything after it is, and if there is no keyboard near the television, [a pointer driven from the pad](#a-pointer-and-a-keyboard-on-the-pad--antimicrox) stands in for one.
 - The launcher reads the session off that window and keeps the bearer token in memory only. It is never written to disk.
 
 ## Sandbox permissions, and why
@@ -136,6 +136,7 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 | --- | --- |
 | `--talk-name=org.freedesktop.Flatpak` | Running commands on the host: `flatpak` to launch the GeForce NOW client with a deep link and to stop a running one first, `systemctl` for the power menu, and writing the autostart entry into your real `~/.config/autostart` |
 | `--device=all` | Reading the gamepad, and the GPU |
+| `--talk-name=org.gnome.SessionManager`, `…PowerManagement`, `…ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one, rather than the whole session bus for one call |
 | `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
 | `--share=network` | The catalog, sign-in, and the status page |
@@ -144,13 +145,64 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 
 **`--talk-name=org.freedesktop.Flatpak` is effectively an exit from the sandbox**, and there is no way around it for an app whose entire purpose is to drive another Flatpak. There is no portal for "launch this Flatpak with these arguments" — the deep link is an argv, not a URI scheme — and stopping a running client needs the host too. If that trade is not one you want to make, the AppImage does the same things with no sandbox at all, which is at least honest about it.
 
-It is also the *only* host permission asked for. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two.
+It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three names under it are ordinary session services being asked a question; none of them can run anything.
 
-Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the first one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed.
+Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the host one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed. Revoke the three screen ones and nothing will say so — a blocked Inhibit call still looks like it succeeded from inside the sandbox, and all you see is the screen going dark while you browse, which is what it did before it asked.
 
 ## Waking the machine with the pad
 
 Not something the launcher can do — `/sys/bus/usb/devices/*/power/wakeup` is root-owned. It takes one udev rule, written up in [docs/wake-on-gamepad.md](./docs/wake-on-gamepad.md).
+
+## Things worth installing around it
+
+None of this is required, and none of it is bundled. The launcher drives whatever pad the kernel already exposes, and on a current kernel that is every pad worth naming. These are the places a television setup runs out of road, and the smallest thing that fills each.
+
+### A pointer and a keyboard on the pad — AntiMicroX
+
+This closes the two gaps the launcher admits to. NVIDIA's sign-in page is not gamepad-navigable, and the desktop you land on after **Back to desktop** cannot be left with a pad either — the Gamepad API only reports to a focused window, so a blurred launcher is a deaf one. The catalogue adds a third: 1 835 of its titles are keyboard-and-mouse only. [AntiMicroX](https://github.com/AntiMicroX/antimicrox) maps sticks to a pointer and buttons to keys through `/dev/uinput`, which is kernel-side — so the launcher, the GeForce NOW client and the stream all see an ordinary mouse and keyboard, sandbox or no sandbox.
+
+```bash
+flatpak install flathub io.github.antimicrox.antimicrox
+```
+
+It is also `antimicrox` in Arch's `extra` and in Fedora's repositories, and on Wayland those are the better choice: the Flathub build needs upstream's `60-antimicrox-uinput.rules` dropped into `/etc/udev/rules.d/` by hand before it can reach uinput. [input-remapper](https://github.com/sezanzeb/input-remapper) does the same job as a system service if you would rather have it always on; there is no Flatpak of it, deliberately, because the daemon needs `/dev/uinput` from outside a sandbox.
+
+Switch a profile on when you need it rather than leaving one running. Nothing grabs the pad exclusively, so while it is mapped it is still a pad as well, and on the launcher's own screens **A** would confirm twice.
+
+### A screen that does not blank — joystickwake
+
+A gamepad is not an input device as far as a compositor's idle timer is concerned: the sticks can be moving and the television still goes dark on schedule. The launcher handles its own screens — it holds the display awake for five minutes after each press, and lets go when it loses focus, so it cannot leave a static grid burning on a television all night. Nothing else on the machine does the same, including anything else you drive with a pad. [joystickwake](https://codeberg.org/forestix/joystickwake) watches the joystick devices for all of them and pokes the blanker when they move.
+
+```bash
+# from the AUR, with whichever helper you use
+paru -S joystickwake
+```
+
+Packaged as `joystickwake` in Debian unstable and Ubuntu 26.10; everywhere else it is one Python file to copy into your `PATH`. On Plasma under Wayland the stock wake commands do not take, and it needs the custom one documented upstream.
+
+### Drivers, only where the kernel runs out
+
+| Pad | What the kernel already does | What is left to install |
+| --- | --- | --- |
+| Xbox 360, One and Series over USB | `xpad`, in tree | Nothing |
+| Xbox One and Series over Bluetooth | Everything you need since 6.5, rumble included | `xpadneo`, and only for trigger rumble, battery level and the Elite paddles |
+| The Xbox Wireless Adapter dongle | Nothing — the protocol is proprietary, not HID | `xone`, plus the dongle firmware |
+| DualSense and DualShock 4 | `hid-playstation` since 5.12: sticks, rumble, touchpad, battery, lightbar | Nothing. `dualsensectl` if you want the pad to switch off from the sofa, which the PS button does not do here |
+| 8BitDo and the rest | The standard layout, in X-input mode | Nothing — but mind the mode switch. In DirectInput the button indices move and the Controls table above stops describing your pad |
+| A pad the kernel sees but you cannot read | — | `game-devices-udev` |
+
+```bash
+paru -S xpadneo-dkms                    # Xbox pads over Bluetooth
+paru -S xone-dkms xone-dongle-firmware  # the Xbox Wireless Adapter
+paru -S dualsensectl                    # battery, lightbar, powering the pad off
+paru -S game-devices-udev               # permissions for pads no rule covers yet
+```
+
+`xpadneo` and `xone` are DKMS modules: they want your kernel headers and they rebuild on every kernel update, and `xone` disables `xpad`, so install it only if you actually own the dongle. Debian has `xpadneo-dkms` in unstable, Fedora has neither, and upstream's installer is the path in both cases — [xpadneo](https://github.com/atar-axis/xpadneo), and [xone](https://github.com/dlundqvist/xone), which is the maintained fork.
+
+### Checking what the kernel actually sees
+
+The footer is the first test and costs nothing: no pad at all reads `NO GAMEPAD DETECTED`, and a pad the launcher cannot hear because another window took focus reads `WINDOW NOT FOCUSED — PAD INPUT PAUSED`. Past that, `evtest` names each button as you press it, which is how you find out whether a pad reports the standard layout or something this launcher will not recognise.
 
 ## Documentation
 

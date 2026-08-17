@@ -2,6 +2,7 @@ import { type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   Gamepad2,
+  HandHeart,
   History,
   LayoutGrid,
   Power,
@@ -11,7 +12,7 @@ import { useFocusable } from '@/focus/SpatialFocus'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-export type View = 'recent' | 'library' | 'catalog' | 'status' | 'settings'
+export type View = 'recent' | 'library' | 'catalog' | 'status' | 'settings' | 'support'
 
 // Recent goes first because it is the shortest path back to what the user was
 // already playing, which is the most likely reason the launcher is open at all.
@@ -24,7 +25,12 @@ const ITEMS: { id: View; label: string; Icon: typeof LayoutGrid }[] = [
   // it is the thing you check when a stream misbehaves, on the way to deciding
   // whether the fault is yours.
   { id: 'status', label: 'Status', Icon: Activity },
-  { id: 'settings', label: 'Settings', Icon: SettingsIcon }
+  { id: 'settings', label: 'Settings', Icon: SettingsIcon },
+  // Last, because it is the only destination that asks the user for something
+  // rather than offering them something, and it should never be on the way to
+  // anywhere. A hand rather than a bare heart: in a rail that sits beside a
+  // games library, a heart reads as "favourites".
+  { id: 'support', label: 'Support', Icon: HandHeart }
 ]
 
 function NavButton({

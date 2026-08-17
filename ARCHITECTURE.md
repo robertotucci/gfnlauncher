@@ -44,6 +44,8 @@ Three details are not what you would guess, and were checked against flatpak 1.1
 
 Two more things the sandbox needs, which are permissions rather than code: `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` for the Status screen's read of `sharedstorage.json`, and read access to the Flatpak install roots for `appConfig.ts`. Both degrade rather than throw when denied.
 
+A third, and the only one whose denial is undetectable: the three `--talk-name`s that let `displaySleep.ts` inhibit screen blanking. A `powerSaveBlocker` whose D-Bus call the sandbox refused still hands back a valid blocker id and still reports `isStarted()`, so there is nothing to classify and nothing to surface — the symptom is the screen blanking, which is also the symptom of not having asked. Chromium picks the interface the session offers, hence three names rather than one.
+
 ## Input and focus
 
 Two systems that are easy to conflate. They are separate.
@@ -101,7 +103,9 @@ Two adaptations the focus model forces, and only two:
 
 Overlays (search, details, screenshots) are hand-rolled `fixed` layers rather than Radix `Dialog`s. Their open/close choreography — `closing` flag, `EXIT_MS`, explicit focus restore — is the most carefully tuned code in the renderer, and Radix would want to own the focus trap, the Escape key and the restore target. The Power dialog **is** a real `Dialog`, because it was new and had nothing to break; it neutralises `onOpenAutoFocus`, `onCloseAutoFocus`, `onEscapeKeyDown` and `onPointerDownOutside` so B and Escape close it through one path.
 
-The only other UI dependency is `qrcode-generator` — zero transitive deps, ships its own types — behind `StoreQr.tsx`. `variants.storeUrl` is useless on a TV with no browser and no pointer, and a code the user photographs moves the link to the one device in the room that can follow it. The matrix is rendered as inline SVG rects rather than a canvas, so the dark modules take `currentColor` and stay on the palette. (`qrcode` was rejected: it pulls in `yargs` and `pngjs`.)
+The only other UI dependency is `qrcode-generator` — zero transitive deps, ships its own types — behind `qrPath` in `src/renderer/src/lib/qr.ts`. `variants.storeUrl` is useless on a TV with no browser and no pointer, and a code the user photographs moves the link to the one device in the room that can follow it. The matrix is rendered as inline SVG rects rather than a canvas, so the dark modules take `currentColor` and stay on the palette. (`qrcode` was rejected: it pulls in `yargs` and `pngjs`.)
+
+`qrPath` is a pure function rather than a hook body because two components draw the same matrix at different sizes — `StoreQr.tsx` in the details panel and `DonateScreen.tsx` — and because the one property nobody can check by eye is that every module lands inside the grid the `-2 -2 count+4` quiet-zone viewBox is built from. `qr.test.ts` checks it.
 
 ## GeForce NOW integration
 
@@ -278,6 +282,18 @@ The screenshot viewer (`ScreenshotViewer.tsx`) is the **one** exception, and onl
 
 Tokens live in `src/renderer/src/styles/globals.css`. Use the semantic ones (`bg-background`, `text-muted-foreground`, `border-border`, `bg-primary`) — a literal colour in a component is a colour the accent switch cannot reach.
 
+## Support
+
+A sixth rail destination whose whole content is a thank-you and a QR code. The donation link was already in `README.md` and in the AppStream `<url type="donation">`, which between them reach people browsing a repository and people browsing a software centre — and nobody who installed a bundle and drives the result from a sofa. The rail is where that person looks. It sits last, above the rule, because it is the only destination that asks the user for something rather than offering them something, and it should never be on the way to anywhere.
+
+**The QR is the feature and the browser is the fallback**, which is the inverse of how this normally goes. `DonateScreen.tsx` renders the code at `15rem` — cover-art scale — and makes it the only focusable on the page. Confirm hands the URL to the desktop through `app:openDonation`, for the machine that happens to have a browser; on a television that press does nothing useful and the code is the entire answer.
+
+**That channel takes no argument, and that is the point.** Everywhere else on this boundary the renderer sends a value and main validates it; here both sides import `DONATION_URL` from `src/shared/donate.ts`, so nothing crosses and there is nothing to forge. It is deliberately *not* `openExternal(url)` with a host allow-list bolted on. Do not widen `setWindowOpenHandler` in `main/index.ts` to serve this either — that one forwards an arbitrary URL with no scheme check, and it exists only as a guard against a `window.open` that should never happen. `donate.test.ts` pins the protocol, the host and the button id: a QR encodes whatever it is given, and nobody proofreads a matrix of black squares.
+
+On Linux `shell.openExternal` is `xdg-open`, which on a machine with no registered http handler can exit 0 having done nothing. A rejection is surfaced under the code; a silent no-op cannot be. One more reason the code, and not the button, is the primary path.
+
+**It is the only centred composition in the launcher.** Every other screen is a tool — content flush to the rail, a list or a grid. The header stays left-aligned so the page is unmistakably part of the app; everything below it is a plate. The code is also the brightest object on screen, which inverts the rule that cover art always wins: there is no cover art here, and the thing to look at is the code.
+
 ## Power
 
 The launcher is the last thing on screen before the TV goes off, so it can end the session: nav rail → Power → Back to desktop / Sleep / Restart / Turn off. `src/main/power.ts` shells out to `systemctl <verb>` with `execFile` — the same three verbs every desktop environment calls, mediated by logind and polkit, needing no native D-Bus module (`npmRebuild: false` and `externalizeDepsPlugin` would make adding one a build-config problem). `buildPowerArgv` is pure so the argv is unit-tested without ever suspending the machine running the suite.
@@ -285,6 +301,12 @@ The launcher is the last thing on screen before the TV goes off, so it can end t
 Nothing here is privileged, and the channel validates the action against the union before it becomes an argument to `systemctl`. A refusal comes back as an error the dialog shows: on a screen with no keyboard, a button that silently does nothing is the one failure nobody can diagnose.
 
 **"Back to desktop" shares the dialog and nothing else.** It is `app:minimize`, not a `PowerAction` — every value in that union becomes an argument to `systemctl`, so a row that ends nothing must not be able to reach it, which is why `PowerDialog` renders it above `CHOICES` and a `Separator` rather than inside the array. `stepAside()` in `src/main/ipc.ts` **drops fullscreen before minimising**: on Linux an iconify request aimed at a fullscreen surface is one many window managers, and every Wayland compositor, are free to ignore, and the launcher would silently stay on top of what it was stepping aside for. `hideOnLaunch` goes through the same helper for the same reason. `second-instance` in `main/index.ts` re-applies fullscreen on the way back, because a restored window otherwise comes back at 1600×900 and stays a desktop app. Coming back at all needs a mouse or keyboard — the Gamepad API only reports to a focused window — and the row's own description says so.
+
+**Keeping the screen on is, though, and it has to be asked for.** A joystick is not seat input, so a compositor's idle timer runs straight through a browsing session: the sticks move, the launcher responds, and the television blanks anyway. `usePadWakeLock` in `src/renderer/src/gamepad/wakeLock.ts` reports input over `app:padActivity` — throttled to one message per `PAD_ACTIVITY_PING_MS`, because holding a direction emits an intent every 90 ms — and `createDisplayWakeLock` in `src/main/displaySleep.ts` holds a `prevent-display-sleep` blocker while `shouldStayAwake` says so. That predicate is pure and lives in `src/shared/wakeLock.ts` beside the two intervals, which have to agree: report far more often than the claim expires, or a pad that never stopped moving would lose the display between two reports.
+
+**The claim follows input, not a connected pad**, which is the simpler rule and the wrong one — it would leave a bright, static grid on a television all night. It also lapses on blur rather than waiting out the timer: once the GeForce NOW client has the screen, the screen is its problem. Note that on Linux this reaches `org.freedesktop.ScreenSaver` and therefore defers the automatic lock while held; that is why it is five minutes and not a permanent inhibit, and why it is worth reading next to the paragraph below, which refuses to touch the lock screen at all.
+
+`powerSaveBlocker` rather than the renderer's Screen Wake Lock API: a page wake lock lasts as long as the document is visible, and this document is always visible.
 
 **Waking the machine with the pad is not something the launcher can do.** `/sys/bus/usb/devices/*/power/wakeup` is root-owned; it takes one udev rule, documented in [docs/wake-on-gamepad.md](./docs/wake-on-gamepad.md). Settings used to carry a card pointing at that file; it was static text with no control in it, so it is gone and the doc is the only pointer left. Privilege escalation is not on the table for this.
 

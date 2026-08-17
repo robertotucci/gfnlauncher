@@ -1,5 +1,6 @@
-import { app, ipcMain, type BrowserWindow } from 'electron'
+import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
+import { DONATION_URL } from '@shared/donate'
 import type {
   AuthResult,
   AuthStatus,
@@ -9,6 +10,7 @@ import type {
   GfnGame,
   LaunchResult,
   LinkedProvider,
+  OpenResult,
   PowerResult,
   Settings,
   StatusSnapshot,
@@ -18,6 +20,7 @@ import type {
 } from '@shared/types'
 import { resolveLaunchPath } from '@shared/games'
 import { isPowerAction, runPowerAction } from './power'
+import { createDisplayWakeLock } from './displaySleep'
 import { detectGfn } from './gfn/flatpak'
 import { isLaunchRequest, launchGame, openGfnClient } from './gfn/launch'
 import { launchViaWeb } from './gfn/webStream'
@@ -84,6 +87,8 @@ async function restoreLauncher(window: BrowserWindow | null): Promise<void> {
  * browse its cache and launch games, because the deep link needs no token.
  */
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
+  const displayWakeLock = createDisplayWakeLock(getWindow)
+
   ipcMain.handle(IPC.gfnInfo, async (): Promise<GfnClientInfo> => detectGfn())
 
   ipcMain.handle(IPC.gfnLaunch, async (_event, request: unknown): Promise<LaunchResult> => {
@@ -340,4 +345,28 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     }
     return runPowerAction(action)
   })
+
+  ipcMain.handle(IPC.appOpenDonation, async (): Promise<OpenResult> => {
+    // No parameter, deliberately. Everywhere else on this boundary the renderer
+    // hands over a value and the main side validates it; here it hands over
+    // nothing, and both sides read the same constant. There is no argument to
+    // forge, so this is not `openExternal(url)` with a host allow-list bolted
+    // on — it is one link that cannot be anything else.
+    try {
+      await shell.openExternal(DONATION_URL)
+      return { ok: true, error: null }
+      // On Linux this is `xdg-open`, which on a machine with no registered
+      // http handler can exit 0 having done nothing. A rejection is reported;
+      // a silent no-op cannot be, which is the other reason the QR code is the
+      // primary path and this is the convenience.
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // `on`, not `handle`: nothing comes back. Also the second channel on this
+  // boundary with no payload, and for the same reason as `app:openDonation` —
+  // there is no argument to forge. The most a renderer could do by shouting
+  // this is keep the television on, which is a thing the user can see.
+  ipcMain.on(IPC.appPadActivity, () => displayWakeLock.padActivity())
 }

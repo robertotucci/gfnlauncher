@@ -21,6 +21,7 @@ import {
 } from '@shared/games'
 import { accentValue, DEFAULT_ACCENT } from '@shared/theme'
 import { useGamepad, useIntent } from '@/gamepad/GamepadProvider'
+import { usePadWakeLock } from '@/gamepad/wakeLock'
 import { useSpatialFocus } from '@/focus/SpatialFocus'
 import { NavRail, type View } from '@/components/NavRail'
 import { HeroPanel } from '@/components/HeroPanel'
@@ -28,6 +29,7 @@ import { GenreStrip } from '@/components/GenreStrip'
 import { GameGrid } from '@/components/GameGrid'
 import { SettingsScreen } from '@/components/SettingsScreen'
 import { StatusScreen } from '@/components/StatusScreen'
+import { DonateScreen, DONATE_FOCUS_ID } from '@/components/DonateScreen'
 import { SearchOverlay, SEARCH_SCOPE } from '@/components/SearchOverlay'
 import { GameDetailsModal, DETAILS_SCOPE } from '@/components/GameDetailsModal'
 import { ScreenshotViewer, SHOTS_SCOPE } from '@/components/ScreenshotViewer'
@@ -106,6 +108,8 @@ export function App(): ReactNode {
   const [powerClosing, setPowerClosing] = useState(false)
   const [powerBusy, setPowerBusy] = useState(false)
   const [powerError, setPowerError] = useState<string | null>(null)
+  /** Why the donation page did not open, or null. Cleared on leaving Support. */
+  const [donateError, setDonateError] = useState<string | null>(null)
   /** A store mutation is in flight, and what the last one had to say. */
   const [storeBusy, setStoreBusy] = useState(false)
   const [storeNotice, setStoreNotice] = useState<string | null>(null)
@@ -129,6 +133,10 @@ export function App(): ReactNode {
 
   const { connected, windowFocused, scheme } = useGamepad()
   const { focusedId, focus, move, confirm, setActiveScope } = useSpatialFocus()
+
+  // A joystick does not reset a compositor's idle timer, so browsing with the
+  // pad would otherwise be watched by a screen on its way to blanking.
+  usePadWakeLock()
 
   // Everything the first paint needs, and nothing that can block it. Listing
   // providers may revive a browser session, which takes seconds — it must not
@@ -279,14 +287,20 @@ export function App(): ReactNode {
           // most useful thing the cursor's first resting place could do here.
           view === 'status'
           ? 'status:refresh'
-          : // Cycling from the strip itself: follow the selection along the strip
-          // rather than dropping the cursor into the grid mid-flick.
-          focusedIdRef.current?.startsWith('genre:')
-          ? `genre:${genre}`
-          : // Otherwise re-seat the grid. The tile the user was on has usually
-            // just been filtered out, and letting it unregister unattended
-            // hands focus to the nav rail.
-            visibleGames[0] && `tile:${visibleGames[0].cmsId}`
+          : // The code is the only focusable on the Support screen, so this is
+            // not a preference — without it the chain falls through to a tile
+            // that is not mounted, `focus()` parks the id as pending, and that
+            // gags the focus manager's own recovery for the rest of the session.
+            view === 'support'
+            ? DONATE_FOCUS_ID
+            : // Cycling from the strip itself: follow the selection along the
+              // strip rather than dropping the cursor into the grid mid-flick.
+              focusedIdRef.current?.startsWith('genre:')
+              ? `genre:${genre}`
+              : // Otherwise re-seat the grid. The tile the user was on has
+                // usually just been filtered out, and letting it unregister
+                // unattended hands focus to the nav rail.
+                visibleGames[0] && `tile:${visibleGames[0].cmsId}`
     // Recorded only once there is somewhere to go. On the very first paint the
     // grid is still empty, and marking the landing done there would mean focus
     // never moves off the nav rail when the catalog finally arrives.
@@ -309,6 +323,13 @@ export function App(): ReactNode {
     }
     if (!genreFacets.some((facet) => facet.code === genre)) setGenre(ALL_GENRES)
   }, [genre, genreFacets, rtxCount])
+
+  // A failed hand-off to the browser describes one press, not a standing state.
+  // Left alone it would still be sitting under the code on the next visit, with
+  // nothing on screen to say it was stale.
+  useEffect(() => {
+    if (view !== 'support') setDonateError(null)
+  }, [view])
 
   const launch = useCallback(async (game: GfnGame) => {
     setHandoff(true)
@@ -482,6 +503,21 @@ export function App(): ReactNode {
     void window.launcher.app.minimize()
   }, [closePower])
 
+  /**
+   * Hands the donation page to the desktop.
+   *
+   * The QR code beside this is the path that always works; this is the shortcut
+   * for a machine that has a browser. A refusal is put on screen rather than
+   * swallowed, because the alternative is a press that appears to do nothing.
+   */
+  const openDonation = useCallback(async () => {
+    setDonateError(null)
+    const result = await window.launcher.app.openDonation()
+    if (!result.ok) {
+      setDonateError(result.error ?? 'Nothing on this machine offered to open the link.')
+    }
+  }, [])
+
   /** Steps the viewer, wrapping so a held shoulder button never dead-ends. */
   const stepShot = useCallback(
     (step: number) => {
@@ -648,7 +684,8 @@ export function App(): ReactNode {
           !powerOpen &&
           view !== 'settings' &&
           view !== 'status' &&
-          view !== 'recent'
+          view !== 'recent' &&
+          view !== 'support'
         ) {
           setGenre((current) => cycleGenre(genreFacets, current, step, rtxCount))
         }
@@ -856,13 +893,19 @@ export function App(): ReactNode {
                   { action: 'back', label: 'Back' },
                   { action: 'menu', label: 'Library' }
                 ]
-              : [
-                  { action: 'confirm', label: 'Details' },
-                  { action: 'start', label: 'Play' },
-                  { action: 'back', label: 'Back' },
-                  { action: 'search', label: 'Search' },
-                  { action: 'menu', label: 'Settings' }
-                ]
+              : view === 'support'
+                ? [
+                    { action: 'confirm', label: 'Open in browser' },
+                    { action: 'back', label: 'Back' },
+                    { action: 'menu', label: 'Settings' }
+                  ]
+                : [
+                    { action: 'confirm', label: 'Details' },
+                    { action: 'start', label: 'Play' },
+                    { action: 'back', label: 'Back' },
+                    { action: 'search', label: 'Search' },
+                    { action: 'menu', label: 'Settings' }
+                  ]
 
   return (
     <div className="bg-background flex h-full flex-col">
@@ -916,6 +959,15 @@ export function App(): ReactNode {
                 onSignOut={signOut}
               />
             </>
+          ) : view === 'support' ? (
+            // Owns its header too, for a different reason than Status does: the
+            // page is a centred plate, and the header is the only part of it
+            // that is not.
+            <DonateScreen
+              scope={ROOT_SCOPE}
+              error={donateError}
+              onOpen={() => void openDonation()}
+            />
           ) : (
             <>
               <HeroPanel game={focusedGame} loading={catalogPending} />

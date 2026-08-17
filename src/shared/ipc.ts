@@ -21,7 +21,9 @@ export const IPC = {
   settingsUpdate: 'settings:update',
   appQuit: 'app:quit',
   appMinimize: 'app:minimize',
-  appPower: 'app:power'
+  appPower: 'app:power',
+  appOpenDonation: 'app:openDonation',
+  appPadActivity: 'app:padActivity'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

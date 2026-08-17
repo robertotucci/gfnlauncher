@@ -8,6 +8,14 @@ Release notes on GitHub and the AppStream `<releases>` block are both generated 
 
 ## [Unreleased]
 
+### Added
+
+- **Support screen.** A sixth entry on the nav rail carrying a thank-you and a QR code for the PayPal donation page, large enough to scan from a sofa. The link was already in the README and in the software-centre metadata, neither of which the person actually using the launcher ever sees. Pressing confirm opens the page in a browser on machines that have one; the code is the path that always works, and it needs no network to draw.
+
+### Fixed
+
+- **The screen no longer blanks while you are browsing with the pad.** A joystick is not an input device as far as a desktop's idle timer is concerned, so the launcher was being read from a television on its way to going dark. It now holds the display awake for five minutes after each press, and lets go as soon as it loses focus — so a launcher left on an empty room still lets the screen off, and the GeForce NOW client is left to manage its own.
+
 ## [0.1.0] - 2026-08-17
 
 First public release.
