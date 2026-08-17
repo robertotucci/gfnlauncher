@@ -17,7 +17,7 @@ export type View = 'recent' | 'library' | 'catalog' | 'status' | 'settings' | 's
 // Recent goes first because it is the shortest path back to what the user was
 // already playing, which is the most likely reason the launcher is open at all.
 // Navigation is geometric, not DOM-ordered, so the position is purely editorial.
-const ITEMS: { id: View; label: string; Icon: typeof LayoutGrid }[] = [
+const ITEMS: { id: View; label: string; Icon: typeof LayoutGrid; tint?: string }[] = [
   { id: 'recent', label: 'Recent', Icon: History },
   { id: 'library', label: 'Library', Icon: Gamepad2 },
   { id: 'catalog', label: 'Catalog', Icon: LayoutGrid },
@@ -30,7 +30,12 @@ const ITEMS: { id: View; label: string; Icon: typeof LayoutGrid }[] = [
   // rather than offering them something, and it should never be on the way to
   // anywhere. A hand rather than a bare heart: in a rail that sits beside a
   // games library, a heart reads as "favourites".
-  { id: 'support', label: 'Support', Icon: HandHeart }
+  //
+  // The one item in the rail that carries a hue, and a deep red rather than the
+  // bright `--destructive` one so it never reads as a fault. It is the single
+  // thing here the launcher is asking *for*, and the colour is what separates it
+  // from six grey destinations without a word of copy.
+  { id: 'support', label: 'Support', Icon: HandHeart, tint: 'text-support' }
 ]
 
 function NavButton({
@@ -38,6 +43,7 @@ function NavButton({
   label,
   Icon,
   active,
+  tint,
   scope,
   onSelect
 }: {
@@ -45,6 +51,8 @@ function NavButton({
   label: string
   Icon: ComponentType<{ className?: string; strokeWidth?: number }>
   active: boolean
+  /** A text colour the icon keeps in every state, or undefined for the grey. */
+  tint?: string
   scope: string
   onSelect: () => void
 }): ReactNode {
@@ -62,10 +70,13 @@ function NavButton({
       )}
     >
       {active && <span className="bg-primary absolute left-0 h-7 w-[3px] rounded-full" />}
+      {/* A tinted icon holds its colour through focus and selection: the hue is
+          what the item *is*, not a state it is in. The ring, the fill and the
+          label brightening below still say where the cursor is. */}
       <Icon
         className={cn(
           'size-6 transition-colors',
-          focused || active ? 'text-foreground' : 'text-muted-foreground'
+          tint ?? (focused || active ? 'text-foreground' : 'text-muted-foreground')
         )}
         strokeWidth={1.75}
       />
@@ -110,6 +121,7 @@ export function NavRail({
           label={item.label}
           Icon={item.Icon}
           active={view === item.id}
+          tint={item.tint}
           scope={scope}
           onSelect={() => onSelect(item.id)}
         />

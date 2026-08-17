@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { LaunchRequest, LauncherApi, PowerAction, Settings } from '@shared/types'
+import type {
+  LaunchRequest,
+  LauncherApi,
+  PowerAction,
+  Settings,
+  UpdateProgress
+} from '@shared/types'
 
 /**
  * The entire privileged surface available to the UI. Every method is an
@@ -43,6 +49,29 @@ const api: LauncherApi = {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
     update: (patch: Partial<Settings>) => ipcRenderer.invoke(IPC.settingsUpdate, patch)
   },
+  update: {
+    check: (force: boolean) => ipcRenderer.invoke(IPC.updateCheck, force),
+    apply: () => ipcRenderer.invoke(IPC.updateApply),
+    restart: () => ipcRenderer.invoke(IPC.updateRestart),
+    /**
+     * The one subscription on this bridge, and the reason it is written out
+     * rather than exposed as a generic `on(channel, …)`: the same rule that
+     * keeps `invoke` off this object applies in reverse. The renderer can
+     * listen to this and to nothing else.
+     *
+     * The listener is handed the payload alone. `IpcRendererEvent` carries a
+     * `sender`, and a live `ipcRenderer` handle reaching the renderer would
+     * undo the whole arrangement — so the event stays on this side and only
+     * data crosses.
+     */
+    onProgress: (listener: (progress: UpdateProgress) => void) => {
+      const forward = (_event: unknown, progress: UpdateProgress): void => listener(progress)
+      ipcRenderer.on(IPC.updateProgress, forward)
+      return () => {
+        ipcRenderer.off(IPC.updateProgress, forward)
+      }
+    }
+  },
   app: {
     quit: () => ipcRenderer.invoke(IPC.appQuit),
     minimize: () => ipcRenderer.invoke(IPC.appMinimize),
@@ -51,7 +80,8 @@ const api: LauncherApi = {
     // The one channel here that does not `invoke`. There is no result to wait
     // for and no failure the renderer could act on, and a promise nobody awaits
     // is a worse description of that than a send.
-    padActivity: () => ipcRenderer.send(IPC.appPadActivity)
+    padActivity: () => ipcRenderer.send(IPC.appPadActivity),
+    diagnostics: () => ipcRenderer.invoke(IPC.appDiagnostics)
   }
 }
 

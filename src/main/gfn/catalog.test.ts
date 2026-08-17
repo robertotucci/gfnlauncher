@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GfnGame } from '@shared/types'
 import {
+  fetchLiveCatalog,
   fetchPublicCatalogGames,
   indexedRtx,
   mapApp,
@@ -8,6 +9,33 @@ import {
   markOwned,
   markSelected
 } from './catalog'
+
+/**
+ * One page, deliberately out of order.
+ *
+ * `fetchLiveCatalog` asks the gateway for `sortString: 'ALPHABETICAL'` and the
+ * gateway ignores it — a real signed-in walk comes back beginning "Wolcen:
+ * Lords of Mayhem, Half-Life 2, Rage". This mock reproduces that so the sort on
+ * our side is pinned rather than assumed.
+ */
+vi.mock('./graphql', () => ({
+  execute: async () => ({
+    apps: {
+      items: [
+        { title: 'Wolcen', sortName: 'wolcen', type: 'GAME', variants: [{ id: 30 }] },
+        { title: 'Alpha', sortName: 'alpha', type: 'GAME', variants: [{ id: 10 }] },
+        { title: 'Middle', sortName: 'middle', type: 'GAME', variants: [{ id: 20 }] }
+      ],
+      pageInfo: { hasNextPage: false }
+    }
+  }),
+  paginate: async (
+    fetchPage: (cursor: string | null) => Promise<{ items: unknown[] }>
+  ): Promise<{ items: unknown[]; truncated: boolean }> => ({
+    items: (await fetchPage(null)).items,
+    truncated: false
+  })
+}))
 
 vi.mock('./publicCatalog', () => ({
   fetchPublicCatalog: async () => ({
@@ -241,6 +269,28 @@ describe('mapApp', () => {
     })
     expect(game?.images.tile).toBe('box.jpg')
     expect(game?.images.hero).toBe('hero.jpg')
+  })
+})
+
+describe('fetchLiveCatalog', () => {
+  /**
+   * The regression: `sortString: 'ALPHABETICAL'` is sent and not honoured, so a
+   * signed-in launcher used to draw its 5.879-title Catalog grid in the order
+   * NVIDIA's panels happen to be assembled in — while a signed-out one, which
+   * goes through the public feed, drew the same grid alphabetically.
+   */
+  it('sorts the authenticated walk, which the gateway does not do for us', async () => {
+    const { games } = await fetchLiveCatalog({
+      endpoint: 'https://example.invalid/graphql',
+      token: null,
+      clientId: 'test',
+      clientVersion: '1',
+      vpcId: 'NP-XXX-01',
+      locale: 'en_US',
+      headers: {}
+    })
+
+    expect(games.map((game) => game.title)).toEqual(['Alpha', 'Middle', 'Wolcen'])
   })
 })
 

@@ -237,20 +237,34 @@ export function readVpcIdFromUrl(rawUrl: string): string | null {
 let capturing: Promise<CapturedSession> | null = null
 
 export async function captureSession(options: CaptureOptions): Promise<CapturedSession> {
-  while (capturing) {
-    // A capture already running may well produce what this caller needs.
+  // Every caller waits on whatever is already in flight, and only *one* of them
+  // starts a replacement when that fails.
+  //
+  // The obvious `while (capturing) { try { return await capturing } catch
+  // { break } }` is subtly wrong, and wrong in exactly the way this variable
+  // exists to prevent: when two callers are waiting on the same failed capture,
+  // both leave the loop and both go on to start one, so two windows race and
+  // tear down each other's webRequest hooks. Retiring the promise under a
+  // `===` check makes the second waiter come back round the loop and find the
+  // replacement the first one started.
+  for (;;) {
+    const pending = capturing
+    if (!pending) break
     try {
-      return await capturing
+      return await pending
     } catch {
-      break
+      if (capturing === pending) capturing = null
     }
   }
 
-  capturing = runCapture(options)
+  const started = runCapture(options)
+  capturing = started
   try {
-    return await capturing
+    return await started
   } finally {
-    capturing = null
+    // Only if nothing has replaced it in the meantime, so a late `finally`
+    // cannot drop somebody else's live capture on the floor.
+    if (capturing === started) capturing = null
   }
 }
 

@@ -94,6 +94,23 @@ export function buildDesktopEntry({
     'Terminal=false',
     'Categories=Game;Network;',
     'X-GNOME-Autostart-enabled=true',
+    // **This is what makes an autostarted launcher come up focused**, and it is
+    // not cosmetic: the Gamepad API only reports to a focused window, so without
+    // it the launcher lands at the front of a fresh session and answers nothing.
+    //
+    // With it, the session issues a startup id — an `XDG_ACTIVATION_TOKEN` under
+    // Wayland — which Chromium consumes for the first window, and the compositor
+    // activates us. Without it there is no token, and a Wayland toplevel cannot
+    // activate itself: `focus()` becomes a request KWin's focus-stealing
+    // prevention is entitled to decline, and no amount of main-process code
+    // fixes it. The *installed* desktop entry has always carried this; the entry
+    // written here did not.
+    //
+    // `StartupWMClass` deliberately does not follow it. That value differs per
+    // packaging — the Flatpak wrapper passes `--class=<app id>`, electron-builder
+    // derives its own for the deb and the AppImage — and a wrong one is worse
+    // than none.
+    'StartupNotify=true',
     // Convention rather than requirement: it tells anyone reading the file by
     // hand which Flatpak put it there, and desktop tooling uses it to tie the
     // entry back to an installed app.

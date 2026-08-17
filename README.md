@@ -86,6 +86,8 @@ All artefacts are attached to each [release](https://github.com/robertotucci/gfn
 
 Two presses launch a game, both on A: A opens the details panel with **Play** already focused, A again plays it. ☰ skips the panel when you already know what you want.
 
+When you quit the game, the launcher closes the GeForce NOW client for you and comes back to the front. The round trip is meant to be a round trip: press Play, play, quit, and you are back on the grid with the pad still working — no keyboard, no mouse, and nothing left holding the screen.
+
 A keyboard mirrors the pad, mostly for development:
 
 | Key | Action |
@@ -137,7 +139,7 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 | `--talk-name=org.freedesktop.Flatpak` | Running commands on the host: `flatpak` to launch the GeForce NOW client with a deep link and to stop a running one first, `systemctl` for the power menu, and writing the autostart entry into your real `~/.config/autostart` |
 | `--device=all` | Reading the gamepad, and the GPU |
 | `--talk-name=org.gnome.SessionManager`, `…PowerManagement`, `…ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one, rather than the whole session bus for one call |
-| `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen |
+| `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen — and noticing when a game has finished, so the launcher can close the client and take the screen back |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
 | `--share=network` | The catalog, sign-in, and the status page |
 | `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc` | Drawing a window |
@@ -203,6 +205,43 @@ paru -S game-devices-udev               # permissions for pads no rule covers ye
 ### Checking what the kernel actually sees
 
 The footer is the first test and costs nothing: no pad at all reads `NO GAMEPAD DETECTED`, and a pad the launcher cannot hear because another window took focus reads `WINDOW NOT FOCUSED — PAD INPUT PAUSED`. Past that, `evtest` names each button as you press it, which is how you find out whether a pad reports the standard layout or something this launcher will not recognise.
+
+## Reporting a problem
+
+**Attach `gfn-launcher.log`.** The launcher keeps its own log, and it is the one file worth sending: nearly everything that can go wrong here happens between this process and something outside it — the GeForce NOW client, the Flatpak portal, your compositor — and the log is the only place both halves of that conversation are written down.
+
+Where it is depends on how you installed the launcher. The path is also printed in the launcher itself, at the bottom of **Settings → This launcher**, and on the screen it shows if the interface ever crashes.
+
+| Install | Log file |
+| --- | --- |
+| Flatpak | `~/.var/app/io.github.robertotucci.GfnLauncher/config/gfn-launcher/logs/gfn-launcher.log` |
+| AppImage, `.deb`, or from source | `~/.config/gfn-launcher/logs/gfn-launcher.log` |
+
+The previous session's log is kept beside it as `gfn-launcher.log.1`, which is the one you want if the launcher restarted itself after whatever you are reporting. Together they are capped at two megabytes; nothing grows without bound.
+
+```bash
+# Flatpak
+cp ~/.var/app/io.github.robertotucci.GfnLauncher/config/gfn-launcher/logs/gfn-launcher.log .
+
+# everything else
+cp ~/.config/gfn-launcher/logs/gfn-launcher.log .
+```
+
+### What is in it, and what is not
+
+Every line is passed through a redaction step on its way to disk, so **no GeForce NOW credential reaches the file**: bearer tokens, JWTs, the `accessToken` and `idToken` the client stores, the account's email address and the machine's MAC address are all replaced before anything is written. That is belt and braces rather than the only defence — the modules that read NVIDIA's files return narrow, declared shapes and never log their contents — but it means the file is safe to paste into a public issue.
+
+It **does** contain file paths from this machine, including your home directory, and the names of games you launched. Those are most of its value: half the failures worth reporting are a path that could not be read.
+
+What it records is deliberately sparse — start-up and which install form this is, what the GeForce NOW client probe found, every game launch and the exact command used, whether the launcher got the screen back afterwards, host commands that failed or were slow, update checks and installs, and anything either process logged as a warning or an error.
+
+### Worth saying alongside it
+
+- Which install form, and the version — both are on the Settings screen and in the first line of the log
+- Whether the session is Wayland or X11, and which desktop — also in the log's second line
+- What you did, and what you expected instead
+
+Open issues at [github.com/robertotucci/gfnlauncher/issues](https://github.com/robertotucci/gfnlauncher/issues).
 
 ## Documentation
 

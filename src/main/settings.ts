@@ -1,8 +1,9 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { app } from 'electron'
 import { DEFAULT_SETTINGS, isLaunchMode, type Settings } from '@shared/types'
 import { isAccentId, isScaleId } from '@shared/theme'
+import { writeFileAtomic } from './atomicFile'
 import { isAutostartEnabled, setAutostart } from './autostart'
 
 let cached: Settings | null = null
@@ -19,8 +20,6 @@ function sanitise(raw: unknown): Settings {
     autostart: typeof input.autostart === 'boolean' ? input.autostart : DEFAULT_SETTINGS.autostart,
     fullscreen:
       typeof input.fullscreen === 'boolean' ? input.fullscreen : DEFAULT_SETTINGS.fullscreen,
-    hideOnLaunch:
-      typeof input.hideOnLaunch === 'boolean' ? input.hideOnLaunch : DEFAULT_SETTINGS.hideOnLaunch,
     // Checked against the union rather than typed as a string: this value picks
     // which of two launch paths runs, and an unrecognised one would fall
     // through to neither.
@@ -35,39 +34,134 @@ function sanitise(raw: unknown): Settings {
     // `setZoomFactor`, where an arbitrary number is an unusable window.
     uiScale: isScaleId(input.uiScale) ? input.uiScale : DEFAULT_SETTINGS.uiScale,
     locale: typeof input.locale === 'string' ? input.locale : DEFAULT_SETTINGS.locale,
-    gfnLinked: typeof input.gfnLinked === 'boolean' ? input.gfnLinked : DEFAULT_SETTINGS.gfnLinked
+    gfnLinked: typeof input.gfnLinked === 'boolean' ? input.gfnLinked : DEFAULT_SETTINGS.gfnLinked,
+    updateCheck:
+      typeof input.updateCheck === 'boolean' ? input.updateCheck : DEFAULT_SETTINGS.updateCheck,
+    // Bounded rather than merely typed. It is only ever compared for equality
+    // against a version string, so nothing here can execute — but this file is
+    // hand-editable, and a megabyte in one field would be carried into memory
+    // and back out to disk on every write.
+    dismissedUpdate:
+      typeof input.dismissedUpdate === 'string' ? input.dismissedUpdate.slice(0, 64) : null
   }
 }
 
-export async function getSettings(): Promise<Settings> {
-  if (cached) return cached
+/**
+ * Shared between concurrent first callers, the same way `loadSnapshot` and
+ * `revalidateOnce` are.
+ *
+ * It is not merely a saved file read. `isAutostartEnabled()` below is a *host*
+ * call inside a Flatpak — a round trip through the portal — and the cold start
+ * has at least two callers racing for it: `createWindow`, which cannot open a
+ * window until this resolves, and the `did-finish-load` handler that re-applies
+ * the zoom factor. Without this they each pay for their own.
+ */
+let loading: Promise<Settings> | null = null
 
+async function load(): Promise<Settings> {
   let stored: Settings
   try {
     stored = sanitise(JSON.parse(await readFile(settingsPath(), 'utf8')))
-  } catch {
+  } catch (error) {
+    // ENOENT is the ordinary first start and says nothing. Anything else means
+    // a file that exists and could not be read or parsed, which is the launcher
+    // silently reverting every preference the user has ever set — the one
+    // outcome here worth a line in the log.
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+      console.warn(
+        `Settings could not be read, falling back to defaults: ` +
+          `${error instanceof Error ? error.message : 'unknown error'}`
+      )
+    }
     stored = { ...DEFAULT_SETTINGS }
   }
 
   // The desktop entry is the source of truth for autostart: the user may have
   // removed it outside the launcher.
   stored.autostart = await isAutostartEnabled()
+  return stored
+}
 
-  cached = stored
+export async function getSettings(): Promise<Settings> {
+  if (cached) return cached
+
+  loading ??= load().finally(() => {
+    loading = null
+  })
+  cached = await loading
   return cached
 }
 
+/**
+ * Serialises writes.
+ *
+ * Not a nicety — without it two settings changes in quick succession lose one
+ * of them, and the launcher makes that easy: `setAutostart` is a host call that
+ * takes hundreds of milliseconds inside a Flatpak, and the user can walk down
+ * the Settings screen flicking rows the whole time. Both calls would read the
+ * same `current`, and whichever finished last would write its own patch over
+ * the other's.
+ *
+ * A promise chain rather than a lock, because there is nothing to fail: each
+ * link reads `cached` after the previous one has replaced it.
+ */
+let writes: Promise<unknown> = Promise.resolve()
+
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
+  const queued = writes.then(() => applyUpdate(patch))
+  // The chain must not break on a failure, or every later write would be
+  // rejected by a fault that has nothing to do with it.
+  writes = queued.catch(() => undefined)
+  return queued
+}
+
+async function applyUpdate(patch: Partial<Settings>): Promise<Settings> {
   const current = await getSettings()
   const next = sanitise({ ...current, ...patch })
 
   if (next.autostart !== current.autostart) {
-    await setAutostart(next.autostart)
+    try {
+      await setAutostart(next.autostart)
+      console.info(`Autostart entry ${next.autostart ? 'written' : 'removed'}`)
+    } catch (error) {
+      // The entry is a *host* file, so this is the one setting that can fail
+      // for a reason outside this process: a sandbox with the host permission
+      // revoked cannot write it. Recording the request anyway would leave the
+      // toggle claiming something the session does not agree with — and
+      // `getSettings` re-reads the entry on the next start, so the lie would
+      // not even survive a restart.
+      next.autostart = current.autostart
+      console.error(
+        `Autostart could not be ${patch.autostart ? 'enabled' : 'disabled'}: ` +
+          `${error instanceof Error ? error.message : 'unknown error'}`
+      )
+    }
   }
 
   cached = next
-  const path = settingsPath()
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(next, null, 2), 'utf8')
+
+  try {
+    await writeFileAtomic(settingsPath(), JSON.stringify(next, null, 2))
+  } catch (error) {
+    // **Deliberately not rethrown.** A rejected `settings:update` crosses the
+    // bridge as a rejected promise — the one result shape the renderer does not
+    // model — and the user would see a control that does nothing at all. The
+    // change is already in `cached`, so it holds for this session and simply
+    // does not survive a restart, which is a far better failure than a dead
+    // toggle. The log is where it stops being invisible.
+    console.error(
+      `Settings could not be saved to ${settingsPath()}: ` +
+        `${error instanceof Error ? error.message : 'unknown error'}. ` +
+        'The change applies to this session only.'
+    )
+  }
+
   return next
+}
+
+/** Test seam, mirroring `resetCatalog`. */
+export function resetSettings(): void {
+  cached = null
+  loading = null
+  writes = Promise.resolve()
 }

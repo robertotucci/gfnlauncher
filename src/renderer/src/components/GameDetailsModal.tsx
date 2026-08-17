@@ -278,7 +278,18 @@ export function GameDetailsModal({
           {shots.length > 0 && (
             // A strip rather than a fixed grid: every shot is reachable, and
             // `focus()` scrolls the focused one to centre, so it carousels.
-            <div className="animate-in fade-in flex gap-3 overflow-x-auto scroll-px-2 px-0.5 py-1.5 duration-300 [scrollbar-width:none]">
+            //
+            // **`shrink-0` is load-bearing.** `overflow-x-auto` makes this a
+            // scroll container on both axes, and a scroll container's automatic
+            // minimum size is zero — so as a flex item in the scrolling column
+            // above it is the one child here that *can* be squashed, and the
+            // flex algorithm runs before the column decides it has anything to
+            // scroll. Every other child resists at its min-content height, so
+            // this one absorbed the whole overflow: at the default 1600×900 the
+            // strip collapsed to a three-pixel sliver and the screenshots simply
+            // were not on screen — while the buttons stayed focusable, so the
+            // cursor could sit on an image nobody could see.
+            <div className="animate-in fade-in flex shrink-0 gap-3 overflow-x-auto scroll-px-2 px-0.5 py-1.5 duration-300 [scrollbar-width:none]">
               {shots.map((shot, index) => (
                 <Shot key={shot} src={shot} index={index} onOpen={onOpenShot} />
               ))}

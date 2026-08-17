@@ -66,6 +66,19 @@
   --status-warn: oklch(0.8 0.14 85);
   --status-alert: oklch(0.75 0.16 55);
 
+  /*
+    The Support rail item, and the only hue outside the status board that is not
+    the accent.
+
+    It is a deep red rather than the bright `--destructive` one, so a donation
+    prompt sitting permanently in the rail never reads as a fault. Darker than
+    anything else in the chrome for the same reason the RTX chip is an outline:
+    it has to be recognisable at a glance without competing with the focus ring
+    or with cover art. Held above 0.5 lightness so it still clears the icon
+    contrast floor at three metres against `--background`.
+  */
+  --support: oklch(0.55 0.19 25);
+
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: var(--brand);
@@ -92,6 +105,7 @@
   --color-status-info: var(--status-info);
   --color-status-warn: var(--status-warn);
   --color-status-alert: var(--status-alert);
+  --color-support: var(--support);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

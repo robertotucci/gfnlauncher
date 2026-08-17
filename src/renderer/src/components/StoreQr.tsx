@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import { qrPath } from '@/lib/qr'
+import { cn } from '@/lib/utils'
 
 /**
  * A store page as something a person on a sofa can actually reach.
@@ -13,7 +14,24 @@ import { qrPath } from '@/lib/qr'
  * canvas: no raster to scale, and the colours stay in the palette instead of
  * being baked into an image.
  */
-export function StoreQr({ url, label }: { url: string; label: string }): ReactNode {
+export function StoreQr({
+  url,
+  label,
+  size
+}: {
+  url: string
+  label: string
+  /**
+   * Tailwind size class, when the default is the wrong one.
+   *
+   * 7rem is right in the details panel, where the code is one fact among many
+   * and the game is the subject. It is wrong wherever the code *is* the answer
+   * — a phone has to lock onto it from a sofa — which is why the Support screen
+   * draws its own at cover-art scale, and why the update notice asks for
+   * something in between.
+   */
+  size?: string
+}): ReactNode {
   const path = useMemo(() => qrPath(url), [url])
 
   return (
@@ -23,7 +41,7 @@ export function StoreQr({ url, label }: { url: string; label: string }): ReactNo
           viewBox padding: without it a scanner will not lock on. */}
       <svg
         viewBox={`-2 -2 ${path.count + 4} ${path.count + 4}`}
-        className="text-background size-[7rem] rounded-sm bg-white/90 p-1"
+        className={cn('text-background rounded-sm bg-white/90 p-1', size ?? 'size-[7rem]')}
         aria-hidden="true"
         shapeRendering="crispEdges"
       >

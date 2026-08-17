@@ -30,13 +30,15 @@ export interface LegendEntry {
  * There is no top bar: above this strip the screen belongs entirely to cover
  * art, which is the one thing a TV renders better than anything else. So the
  * footer carries both halves of the interface's own state — what the buttons do
- * on the left, what the machine is doing on the right.
+ * on the left, what the machine is doing on the right, and both versions at the
+ * far end of it.
  */
 export function StatusFooter({
   entries,
   scheme,
   signal,
   version,
+  appVersion,
   status
 }: {
   entries: LegendEntry[]
@@ -45,6 +47,8 @@ export function StatusFooter({
   signal: SignalState
   /** GFN client version, or null when the Flatpak is not installed. */
   version: string | null
+  /** This launcher's own version, or null until the update check has answered. */
+  appVersion: string | null
   /** Input-state notice, kept here so it never covers artwork. */
   status?: string | null
 }): ReactNode {
@@ -92,10 +96,22 @@ export function StatusFooter({
           {SIGNAL_LABELS[signal]}
         </span>
 
+        {/* Unlabelled, because it hangs off the line that has just said GFN
+            CLIENT and reads as part of it. */}
         {version && (
           <>
             <Separator orientation="vertical" className="h-3.5" />
             <span>v{version}</span>
+          </>
+        )}
+
+        {/* Named, because it is not: two versions in one strip need saying which
+            program each belongs to, and this is the far end of the footer — the
+            last thing read, and the first thing asked for in a bug report. */}
+        {appVersion && (
+          <>
+            <Separator orientation="vertical" className="h-3.5" />
+            <span>LAUNCHER v{appVersion}</span>
           </>
         )}
       </div>

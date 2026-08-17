@@ -33,6 +33,15 @@ describe('buildDesktopEntry', () => {
     })
   })
 
+  it('asks the session for a startup notification, which is what makes it come up focused', () => {
+    // Without this the session mints no activation token, a Wayland toplevel
+    // cannot activate itself, and the launcher arrives at login unfocused — with
+    // no gamepad input, because the Gamepad API only reports to a focused
+    // window. It is the one field here whose absence is invisible in the file
+    // and fatal on the sofa.
+    expect(fields(buildDesktopEntry({ exec: '/bin/true', icon: 'x' })).StartupNotify).toBe('true')
+  })
+
   it('starts the app, not the sandboxed binary, for a Flatpak install', () => {
     const entry = buildDesktopEntry({
       exec: 'flatpak run io.github.robertotucci.GfnLauncher',

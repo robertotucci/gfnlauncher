@@ -102,6 +102,22 @@ describe('isLaunchRequest', () => {
     expect(isLaunchRequest({ cmsId: '1', gameId: '2', shortName: 7 })).toBe(false)
     expect(isLaunchRequest({ cmsId: '1', gameId: '2', parentGameId: {} })).toBe(false)
   })
+
+  it('rejects a field long enough to be an argv problem rather than an id', () => {
+    // These four strings are the only renderer-supplied values that become
+    // argv. A forged megabyte comes back from `spawn` as a bare E2BIG, which
+    // names nothing; refusing it here produces the notice that does.
+    const huge = 'x'.repeat(1_000)
+    expect(isLaunchRequest({ cmsId: huge, gameId: '2' })).toBe(false)
+    expect(isLaunchRequest({ cmsId: '1', gameId: huge })).toBe(false)
+    expect(isLaunchRequest({ cmsId: '1', gameId: '2', shortName: huge })).toBe(false)
+    expect(isLaunchRequest({ cmsId: '1', gameId: '2', parentGameId: huge })).toBe(false)
+  })
+
+  it('still accepts an id far longer than any the catalog produces', () => {
+    // The bound is headroom, not a rule about the shape of a real id.
+    expect(isLaunchRequest({ cmsId: 'x'.repeat(200), gameId: '2' })).toBe(true)
+  })
 })
 
 describe('buildOpenArgv', () => {

@@ -70,4 +70,33 @@ describe('scoreCandidate', () => {
     const nudged = scoreCandidate(origin, rect(140, 150), 'down')!
     expect(aligned).toBeLessThan(nudged)
   })
+
+  it('keeps the cursor in the panel it is walking, however far the next row is', () => {
+    // The real geometry of the Settings screen, to the pixel: the first row, the
+    // nav rail's Status button beside it, and the row that is actually next.
+    // Weighting the sideways gap made Status win — pressing Down on the first
+    // setting left the panel for something level with it.
+    const firstRow = rect(178, 240, 944, 85)
+    const railBeside = rect(10, 324, 99, 91)
+    const nextRow = rect(178, 603, 944, 85)
+
+    expect(scoreCandidate(firstRow, nextRow, 'down')!).toBeLessThan(
+      scoreCandidate(firstRow, railBeside, 'down')!
+    )
+  })
+
+  it('does not reward a candidate for barely qualifying', () => {
+    // `EPSILON` lets a candidate whose top edge is a hair above the cursor's
+    // bottom count as below it. Its distance is then negative, which used to
+    // score better than being genuinely adjacent.
+    const level = scoreCandidate(origin, rect(0, 97), 'down')!
+    const adjacent = scoreCandidate(origin, rect(0, 100), 'down')!
+    expect(level).toBe(adjacent)
+  })
+
+  it('still reaches off-axis targets when nothing is in front of the cursor', () => {
+    // The cost is a tie-break, not a filter: at the top of the Settings list
+    // there is nothing above but the nav rail, and Up has to get there.
+    expect(scoreCandidate(rect(178, 240, 944, 85), rect(10, 30, 99, 91), 'up')).not.toBeNull()
+  })
 })

@@ -32,6 +32,33 @@ const SpatialFocusContext = createContext<SpatialFocusContextValue | null>(null)
 /** How strongly drifting off-axis is penalised when picking a target. */
 const ORTHOGONAL_PENALTY = 2.5
 
+/**
+ * What it costs a candidate not to be in front of the cursor at all.
+ *
+ * ── The failure this fixes ──────────────────────────────────────────────────
+ *
+ * `ORTHOGONAL_PENALTY` is a *weight*, so a candidate far enough to the side can
+ * always be bought back by being close. On the Settings screen that is not a
+ * near miss, it is the wrong answer: pressing Down on the first row jumped to
+ * the nav rail. Measured, on the real layout — the row sits at y 240–325 and
+ * x 178–1122, the rail's Status button at y 324–415 and x 10–109, and the next
+ * settings row 278 px below. Status scores `-1 + 69 × 2.5 = 171`; the row that
+ * is actually next scores 278. So the cursor left the panel it was walking, and
+ * landed on something whose top edge is *level with* the row it started from.
+ *
+ * ── The rule ────────────────────────────────────────────────────────────────
+ *
+ * A candidate that overlaps the cursor on the cross axis is in front of it; one
+ * that does not is beside it. Anything in front wins, and distance only decides
+ * between peers. That is what "down" means to somebody holding a pad, and it is
+ * what makes the outcome stop depending on a few pixels of layout.
+ *
+ * Off-axis candidates are still *reachable*, which is why this is a large
+ * constant rather than a filter: at the top of the Settings list there is
+ * nothing above but the rail, and Up has to reach it.
+ */
+const OFF_AXIS_COST = 100_000
+
 /** Rects that differ by less than this are treated as aligned. */
 const EPSILON = 4
 
@@ -98,7 +125,15 @@ export function scoreCandidate(
   // Ties are left to the caller, which keeps the first candidate it saw —
   // registration order, i.e. DOM order. That is what makes a row of equally
   // aligned swatches land on the leftmost rather than an arbitrary one.
-  return primary + orthogonal * ORTHOGONAL_PENALTY
+  //
+  // `primary` is floored at zero because `EPSILON` lets a candidate qualify from
+  // slightly *behind* the cursor's trailing edge, and a negative distance would
+  // otherwise be a reward for it.
+  return (
+    Math.max(0, primary) +
+    orthogonal * ORTHOGONAL_PENALTY +
+    (orthogonal > 0 ? OFF_AXIS_COST : 0)
+  )
 }
 
 export function SpatialFocusProvider({ children }: { children: ReactNode }): ReactNode {

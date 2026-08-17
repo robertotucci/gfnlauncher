@@ -6,8 +6,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
-## [Unreleased]
-
 ## [0.1.0] - 2026-08-17
 
 First public release.
@@ -18,6 +16,7 @@ First public release.
 - **Full GeForce NOW catalogue**, around 5 900 titles, with genre filtering, an RTX filter, and server-side search driven from an on-screen alphabetical keyboard.
 - **Library and ownership.** Sign in through NVIDIA's own login page in a window the launcher owns; your linked stores' libraries appear automatically. Store chips in the details panel pick which edition launches, for the ~850 titles that exist on more than one store.
 - **Details panel** with description, screenshots, supported controls, subscription tier and a QR code for the store page — because a link is useless on a TV with no browser, and a code moves it to the phone in the room.
+- **The launcher closes GeForce NOW when you quit a game, and comes back to the front.** The client does not exit on its own when a stream ends — it returns to its own mall and keeps the screen, which on a machine with no mouse would leave the launcher unreachable. It is watched for the end of a session, closed, and the launcher is raised and refocused. If that watch cannot run, games still launch and quitting the client by hand still brings the launcher back.
 - **Recent**, a chronology of what you played.
 - **Status screen** that opens with *your* datacenter rather than a list of 76, read from the client's own routing configuration on disk. No account, no network needed for that half.
 - **Settings**: accent colour (seven presets), interface scale (75–175%), fullscreen, autostart, launch mode, library sync, and a row that hands the screen to the real GeForce NOW client for the things this launcher does not mirror.
@@ -26,6 +25,9 @@ First public release.
 - **Autostart** via a standard XDG desktop entry, so the launcher comes up with the session.
 - **A screen that stays on while you are using the pad.** A joystick is not an input device as far as a desktop's idle timer is concerned, so a launcher driven from a controller would otherwise be read from a television on its way to going dark. The display is held awake for five minutes after each press and let go as soon as the window loses focus, so an empty room still gets its screen off and the GeForce NOW client is left to manage its own.
 - **Offline behaviour.** Fonts are self-hosted, the catalogue is cached on disk, and a machine that has never fetched anything still shows a usable interface.
+- **The launcher tells you when there is a new version, installs it, and restarts into it.** A notice carries the release notes and, where this build is allowed to replace itself, a button that does it: a Flatpak runs `flatpak update`, an AppImage downloads the new file and checks it against the checksum GitHub published. A progress bar follows either one — the percentage flatpak reports, or the megabytes as they arrive — and when it finishes the launcher reopens itself on the new version after a ten-second countdown you can stop. A copy installed by a package manager gets a QR code for the release page instead, because that install belongs to the package manager. Nothing downloads without you saying so, nothing is installed unverified, and "Not now" means not again until the next release. The check itself can be turned off in Settings.
+- **There is a log file to attach to a bug report.** The launcher writes down what it started, what it asked the machine for and what the machine said — every launch and the exact command, whether it got the screen back afterwards, host calls that failed, updates either side of installing them. Credentials are stripped from every line before it is written, so the file is safe to paste into a public issue. Settings names the path, and so does the README.
+- **A crash says so instead of showing a black screen.** If the interface fails while drawing, the launcher replaces it with a page naming the fault and the log file, and any button on the pad reloads it. A renderer that dies outright is brought back automatically, up to three times.
 
 ### Packaging
 
@@ -33,5 +35,4 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
-[Unreleased]: https://github.com/robertotucci/gfnlauncher/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0

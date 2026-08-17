@@ -55,8 +55,31 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
    */
   const lastSource = useRef<'pad' | 'key' | null>(null)
 
+  /**
+   * Delivers one intent to every subscriber, and lets none of them stop the
+   * loop.
+   *
+   * **This try/catch is the difference between a bug and a brick.** `emit` is
+   * called from inside the `requestAnimationFrame` tick below, so an exception
+   * thrown by a handler propagates out of `tick` — past the
+   * `requestAnimationFrame(tick)` that would have scheduled the next frame.
+   * The loop simply stops, and on a gamepad-only launcher that is every input
+   * dead for the rest of the session, with no keyboard in the room to recover
+   * with and nothing on screen to say why.
+   *
+   * There is exactly one subscriber and it is `App`'s intent handler, which
+   * touches most of the state in the application. Isolating each handler costs
+   * one frame's worth of nothing and turns "the launcher stopped responding"
+   * into "one press did nothing, and the log says which".
+   */
   const emit = useCallback((intent: Intent) => {
-    for (const handler of handlers.current) handler(intent)
+    for (const handler of handlers.current) {
+      try {
+        handler(intent)
+      } catch (error) {
+        console.error('A gamepad intent handler threw; input continues.', intent, error)
+      }
+    }
   }, [])
 
   const subscribe = useCallback((handler: IntentHandler) => {
@@ -77,7 +100,26 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
       setScheme((current) => (current === next ? current : next))
     }
 
+    /**
+     * One poll.
+     *
+     * The whole body is wrapped and the next frame is scheduled in `finally`,
+     * for the reason `emit` above documents: this loop is the only path input
+     * takes, so anything that escapes it ends input for the session. `emit`
+     * already guards the handlers; this covers the rest — a `navigator.getGamepads`
+     * that throws behind a driver fault, a `setConnected` during teardown.
+     */
     const tick = (): void => {
+      try {
+        poll()
+      } catch (error) {
+        console.error('The gamepad poll threw; continuing.', error)
+      } finally {
+        frame = requestAnimationFrame(tick)
+      }
+    }
+
+    const poll = (): void => {
       const pads = navigator.getGamepads?.() ?? []
       let anyConnected = false
       let direction: ReturnType<typeof readDirection> = null
@@ -138,8 +180,6 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
         repeatAt = now + REPEAT_INTERVAL_MS
         emit({ kind: 'move', direction })
       }
-
-      frame = requestAnimationFrame(tick)
     }
 
     frame = requestAnimationFrame(tick)

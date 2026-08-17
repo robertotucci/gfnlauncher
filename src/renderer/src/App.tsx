@@ -9,7 +9,10 @@ import type {
   PowerAction,
   Settings,
   StatusSnapshot,
-  StoreMutationResult
+  StoreMutationResult,
+  UpdateApplyResult,
+  UpdateProgress,
+  UpdateStatus
 } from '@shared/types'
 import { RECENT_LIMIT } from '@shared/types'
 import {
@@ -34,6 +37,7 @@ import { SearchOverlay, SEARCH_SCOPE } from '@/components/SearchOverlay'
 import { GameDetailsModal, DETAILS_SCOPE } from '@/components/GameDetailsModal'
 import { ScreenshotViewer, SHOTS_SCOPE } from '@/components/ScreenshotViewer'
 import { PowerDialog, POWER_FIRST_ID, POWER_SCOPE } from '@/components/PowerDialog'
+import { UpdateDialog, UPDATE_SCOPE, updateLandingId } from '@/components/UpdateDialog'
 import { StatusFooter, type LegendEntry, type SignalState } from '@/components/StatusFooter'
 import { LoadingBar } from '@/components/LoadingBar'
 import {
@@ -66,9 +70,37 @@ const SYNC_SETTLE_MS = 10_000
  */
 const LAUNCH_NOTICE_MS = 8_000
 
+/**
+ * How long the launcher waits before restarting itself into a new version.
+ *
+ * There is a countdown at all because this is the launcher taking the screen
+ * away from somebody who may have pressed the button and walked off, and ten
+ * seconds is long enough to read what is about to happen and stop it from three
+ * metres. It is not a confirmation dialog: the user already confirmed by
+ * installing, and an appliance that needs a second yes to finish the job it was
+ * told to do is an appliance that leaves itself half-updated.
+ */
+const RESTART_COUNTDOWN_S = 10
+
 /** "1 store" / "3 stores", so the notice line reads like a sentence. */
 function storeCount(count: number): string {
   return `${count} store${count === 1 ? '' : 's'}`
+}
+
+/**
+ * One result out of the first-paint batch, or a fallback and a line in the log.
+ *
+ * The batch used to be a `Promise.all`, which is the wrong shape for it: these
+ * five calls are independent, and a single rejection left *none* of them
+ * applied — `catalogSource` stayed null, so `catalogPending` stayed true, and
+ * the launcher sat on a loading bar for the rest of the session with nothing on
+ * screen to say why. Settling them one at a time means one broken answer costs
+ * one part of the screen.
+ */
+function settled<T>(result: PromiseSettledResult<T>, what: string, fallback: T): T {
+  if (result.status === 'fulfilled') return result.value
+  console.error(`${what} could not be loaded:`, result.reason)
+  return fallback
 }
 
 /** Fold case, accents and punctuation so "Baldur's" matches "baldurs". */
@@ -93,6 +125,8 @@ export function App(): ReactNode {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchClosing, setSearchClosing] = useState(false)
   const [query, setQuery] = useState('')
+  /** Where focus was when the overlay opened, so it can be handed back. */
+  const searchOrigin = useRef<string | null>(null)
   const [detailsGame, setDetailsGame] = useState<GfnGame | null>(null)
   const [details, setDetails] = useState<GameDetails | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
@@ -108,6 +142,35 @@ export function App(): ReactNode {
   const [powerClosing, setPowerClosing] = useState(false)
   const [powerBusy, setPowerBusy] = useState(false)
   const [powerError, setPowerError] = useState<string | null>(null)
+  /** What the last update check found. Null until one has run. */
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const [updateClosing, setUpdateClosing] = useState(false)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateApplying, setUpdateApplying] = useState(false)
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null)
+  const [updateResult, setUpdateResult] = useState<UpdateApplyResult | null>(null)
+  /** Seconds left before the launcher restarts itself, or null when nothing is. */
+  const [restartIn, setRestartIn] = useState<number | null>(null)
+  /**
+   * The restart was asked for and refused.
+   *
+   * A separate flag from `updateResult`, because the install succeeded: the new
+   * version is on disk and only the reopening failed, and folding it into the
+   * result would replace "installed" with "failed" and hide the half that
+   * worked.
+   */
+  const [restartRefused, setRestartRefused] = useState(false)
+  /** Where focus was when the notice opened, so it can be handed back. */
+  const updateOrigin = useRef<string | null>(null)
+  /**
+   * The notice has been on screen once this run.
+   *
+   * Set by `openUpdate` rather than by the effect that calls it, so closing the
+   * notice with B cannot let the effect immediately put it back up — which is
+   * what happens if the "shown" flag belongs to the automatic path alone.
+   */
+  const updateShown = useRef(false)
   /** Why the donation page did not open, or null. Cleared on leaving Support. */
   const [donateError, setDonateError] = useState<string | null>(null)
   /** A store mutation is in flight, and what the last one had to say. */
@@ -130,6 +193,17 @@ export function App(): ReactNode {
   const [authenticated, setAuthenticated] = useState(false)
   const [signingIn, setSigningIn] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
+  /**
+   * The launcher came up unable to talk to its own main process.
+   *
+   * Its own state rather than a notice, because it outranks everything the
+   * footer would otherwise be saying: with no bridge there is no pad handling
+   * worth reporting on and no control on any screen that does anything. Held
+   * already-uppercased, since the footer prints it verbatim.
+   */
+  const [bootError, setBootError] = useState<string | null>(null)
+  /** Where the log file is, for the Settings nameplate. Null until it answers. */
+  const [logPath, setLogPath] = useState<string | null>(null)
 
   const { connected, windowFocused, scheme } = useGamepad()
   const { focusedId, focus, move, confirm, setActiveScope } = useSpatialFocus()
@@ -141,9 +215,27 @@ export function App(): ReactNode {
   // Everything the first paint needs, and nothing that can block it. Listing
   // providers may revive a browser session, which takes seconds — it must not
   // hold the UI hostage, so it runs on its own afterwards.
+  //
+  // Settled rather than all-or-nothing: see `settled`. The bridge itself
+  // failing is handled separately, because that is not one answer missing but
+  // every answer missing, and it needs saying out loud.
   useEffect(() => {
     void (async () => {
-      const [snapshot, loadedSettings, info, auth, recent] = await Promise.all([
+      if (!window.launcher) {
+        // A preload that did not load. Every control on every screen is inert
+        // from here, so the honest thing is to name it rather than let the user
+        // press things — and `catalogPending` has to be released or the
+        // loading bar runs forever on top of it.
+        // Short, because it shares the footer strip with the legend and the two
+        // version nameplates. The long form of the same fact is on the crash
+        // screen and in the log.
+        setBootError('MAIN PROCESS UNREACHABLE — RESTART THE LAUNCHER')
+        setCatalogSource('fixture')
+        setFixturesAreFinal(true)
+        return
+      }
+
+      const [snapshot, loadedSettings, info, auth, recent] = await Promise.allSettled([
         window.launcher.catalog.get(),
         window.launcher.settings.get(),
         window.launcher.gfn.info(),
@@ -152,19 +244,55 @@ export function App(): ReactNode {
         // and the Recent rail item is a dead end until it arrives.
         window.launcher.recent.list()
       ])
-      setGames(snapshot.games)
-      setCatalogSource(snapshot.source)
-      setSettings(loadedSettings)
-      setClient(info)
-      setAuthenticated(auth.authenticated)
-      setRecentIds(recent)
+
+      // Falling back to `fixture` rather than to an empty cache is deliberate:
+      // it is the one source the auto-refresh effect below reacts to, so a
+      // catalog read that failed transiently is retried from the network
+      // instead of leaving an empty grid nothing will ever fill.
+      const catalog = settled(snapshot, 'The catalogue', {
+        games: [],
+        fetchedAt: '',
+        source: 'fixture' as const
+      })
+      setGames(catalog.games)
+      setCatalogSource(catalog.source)
+      // Left null on failure on purpose: `SettingsScreen` renders skeletons for
+      // a null `settings`, which is a truer picture than a screen full of
+      // defaults the file does not actually contain.
+      const loaded = settled<Settings | null>(loadedSettings, 'Settings', null)
+      if (loaded) setSettings(loaded)
+      setClient(settled<GfnClientInfo | null>(info, 'The GeForce NOW client probe', null))
+      setAuthenticated(settled(auth, 'Sign-in state', { authenticated: false }).authenticated)
+      setRecentIds(settled(recent, 'Play history', []))
     })()
   }, [])
 
+  /**
+   * The half of the first load that has to wait for a session.
+   *
+   * **Sequential, and that is the whole point of the effect.** `library.providers()`
+   * is what revives the persisted browser session — a headless capture that takes
+   * a few seconds — and `auth.status()` is a synchronous read of the result.
+   * Asking for both at once resolves the second one first, out of the state that
+   * existed *before* the revival, and pins `authenticated` to false for the rest
+   * of the session: the Settings screen then offers "Sign in to GeForce NOW"
+   * directly above the list of stores that sign-in just fetched, "Refresh every
+   * store library" is disabled with "Sign in first", and the details panel
+   * refuses to set a launch store. All of it on an account that is signed in.
+   */
   useEffect(() => {
     void (async () => {
-      setProviders(await window.launcher.library.providers())
-      setAuthenticated((await window.launcher.auth.status()).authenticated)
+      if (!window.launcher) return
+      try {
+        setProviders(await window.launcher.library.providers())
+      } catch (error) {
+        console.error('Linked stores could not be loaded:', error)
+      }
+      try {
+        setAuthenticated((await window.launcher.auth.status()).authenticated)
+      } catch (error) {
+        console.error('Sign-in state could not be read:', error)
+      }
     })()
   }, [])
 
@@ -236,7 +364,8 @@ export function App(): ReactNode {
     return games.filter((game) => normalise(game.title).includes(needle))
   }, [games, query])
 
-  const overlayOpen = detailsGame !== null || searchOpen || shots !== null || powerOpen
+  const overlayOpen =
+    detailsGame !== null || searchOpen || shots !== null || powerOpen || updateOpen
 
   const focusedGame = useMemo(() => {
     const cmsId = focusedId?.replace(/^(tile|result):/, '')
@@ -334,23 +463,38 @@ export function App(): ReactNode {
   const launch = useCallback(async (game: GfnGame) => {
     setHandoff(true)
     setLaunchNotice(null)
-    // Through the resolver, not the raw cmsId: a title the user has pointed at
-    // another store has to start that store's edition.
-    const result = await window.launcher.gfn.launch(resolveLaunchTarget(game))
 
-    if (result.ok) {
-      // Main wrote the history entry; read it back rather than guessing at the
-      // ordering rules, which are its to own.
-      setRecentIds(await window.launcher.recent.list())
-      // Only the happy path gets the full hold: HANDING OFF is meant to cover
-      // the seconds before GFN takes the screen, and there is nothing to cover
-      // when nothing is coming.
-      window.setTimeout(() => setHandoff(false), 2500)
-      return
+    try {
+      // Through the resolver, not the raw cmsId: a title the user has pointed at
+      // another store has to start that store's edition.
+      const result = await window.launcher.gfn.launch(resolveLaunchTarget(game))
+
+      if (result.ok) {
+        // Main wrote the history entry; read it back rather than guessing at
+        // the ordering rules, which are its to own.
+        setRecentIds(await window.launcher.recent.list())
+        // Only the happy path gets the full hold: HANDING OFF is meant to cover
+        // the seconds before GFN takes the screen, and there is nothing to
+        // cover when nothing is coming.
+        window.setTimeout(() => setHandoff(false), 2500)
+        return
+      }
+
+      setHandoff(false)
+      setLaunchNotice({ reason: launchFailureReason(result), command: result.command })
+    } catch (error) {
+      // `gfn:launch` answers with a `LaunchResult` rather than throwing, so
+      // reaching here means the bridge itself did. Caught because the footer is
+      // already reading HANDING OFF: leaving it there would be the launcher
+      // claiming a game is starting when nothing is, which is worse than any
+      // error it could show instead.
+      console.error('Launch request failed:', error)
+      setHandoff(false)
+      setLaunchNotice({
+        reason: 'The launcher could not reach its own main process.',
+        command: null
+      })
     }
-
-    setHandoff(false)
-    setLaunchNotice({ reason: launchFailureReason(result), command: result.command })
   }, [])
 
   // Long enough to read a command string at three metres, then gone: there is
@@ -363,6 +507,12 @@ export function App(): ReactNode {
   }, [launchNotice])
 
   const openSearch = useCallback(() => {
+    // Remembered the way the details panel and the update notice remember
+    // theirs: restoring the scope alone leaves the cursor wherever `focusFirst`
+    // puts it, which is the top-left of the screen — the nav rail. Closing a
+    // search you opened from a tile should put you back on that tile, not three
+    // presses away from it.
+    searchOrigin.current = focusedIdRef.current
     setSearchOpen(true)
     setActiveScope(SEARCH_SCOPE)
     // Land on the keyboard, not on the result list — searching is the reason
@@ -373,12 +523,23 @@ export function App(): ReactNode {
   const closeSearch = useCallback(() => {
     setSearchClosing(true)
     window.setTimeout(() => {
+      const origin = searchOrigin.current
+      searchOrigin.current = null
       setSearchOpen(false)
       setSearchClosing(false)
       setQuery('')
       setActiveScope(ROOT_SCOPE)
+      // Only a tile, and only one that is still on the grid. Search covers the
+      // whole catalog while the grid behind it may be a genre or the library,
+      // and a title un-owned from the panel leaves the library while the overlay
+      // is up. Asking for an id that is not mounted would park it as pending,
+      // which gags the focus manager's own recovery until the next scope change.
+      const cmsId = origin?.startsWith('tile:') ? origin.slice('tile:'.length) : null
+      if (origin && cmsId && visibleGames.some((game) => game.cmsId === cmsId)) {
+        window.setTimeout(() => focus(origin), 0)
+      }
     }, EXIT_MS)
-  }, [setActiveScope])
+  }, [setActiveScope, focus, visibleGames])
 
   const openDetails = useCallback(
     (game: GfnGame, originId: string, originScope: string) => {
@@ -468,6 +629,107 @@ export function App(): ReactNode {
       window.setTimeout(() => focus('nav:power'), 0)
     }, EXIT_MS)
   }, [setActiveScope, focus])
+
+  const openUpdate = useCallback(
+    (status: UpdateStatus) => {
+      updateShown.current = true
+      updateOrigin.current = focusedIdRef.current
+      setUpdate(status)
+      setUpdateResult(null)
+      setUpdateProgress(null)
+      setUpdateOpen(true)
+      setActiveScope(UPDATE_SCOPE)
+      // Land on the install row when there is one — the notice exists to be
+      // acted on. A timeout rather than a microtask, so this wins over the
+      // focus manager's "first registered element" fallback.
+      window.setTimeout(() => focus(updateLandingId(status)), 0)
+    },
+    [setActiveScope, focus]
+  )
+
+  const closeUpdate = useCallback(() => {
+    setUpdateClosing(true)
+    window.setTimeout(() => {
+      const origin = updateOrigin.current
+      updateOrigin.current = null
+      setUpdateOpen(false)
+      setUpdateClosing(false)
+      setUpdateApplying(false)
+      setUpdateProgress(null)
+      // Closing stops the countdown, and that is not a detail: a launcher that
+      // restarted itself after the notice had gone would look like a crash.
+      setRestartIn(null)
+      setRestartRefused(false)
+      setActiveScope(ROOT_SCOPE)
+      // Back to whatever opened this — the Settings row, or wherever the cursor
+      // was standing when the check came back on its own.
+      if (origin) {
+        window.setTimeout(() => focus(origin), 0)
+        return
+      }
+      // No origin means the notice opened itself before the cursor had settled
+      // anywhere — a cold start, where the catalog had only just arrived. Clear
+      // the landing marker instead of guessing: `overlayOpen` has just changed,
+      // so the landing effect re-runs and seats the grid the way it would have
+      // if the notice had never appeared.
+      lastLanding.current = null
+    }, EXIT_MS)
+  }, [setActiveScope, focus])
+
+  /**
+   * Closes the notice and records the version, so it does not open itself again.
+   *
+   * The difference between this and `closeUpdate` is the whole reason "Not now"
+   * is not just a cancel: without it the popup would reappear on every start
+   * until the user gave in, which is the behaviour that makes people turn
+   * update checks off entirely.
+   */
+  const dismissUpdate = useCallback(() => {
+    const version = update?.latestVersion
+    // Through `setSettings` rather than fire-and-forget: the renderer's copy of
+    // the settings is what the auto-open effect reads, and a stale one would
+    // have it disagree with the file about what has been dismissed.
+    if (version) {
+      void window.launcher.settings.update({ dismissedUpdate: version }).then(setSettings)
+    }
+    closeUpdate()
+  }, [update?.latestVersion, closeUpdate])
+
+  /**
+   * Installs the update, on the paths where that is the launcher's to do.
+   *
+   * A failure keeps the notice open and shows the reason and the command,
+   * exactly as the power dialog does with a polkit refusal — and leaves the row
+   * in place reading "Try again", because the most likely failure here is a
+   * connection that dropped halfway.
+   */
+  const applyUpdate = useCallback(async () => {
+    setUpdateApplying(true)
+    setUpdateResult(null)
+    setUpdateProgress(null)
+    try {
+      const result = await window.launcher.update.apply()
+      setUpdateResult(result)
+      if (result.ok) {
+        // Nothing left to be told about: the version on disk is the one the
+        // notice was offering.
+        const version = update?.latestVersion
+        if (version) {
+          void window.launcher.settings.update({ dismissedUpdate: version }).then(setSettings)
+        }
+        // Land on whatever the installed state put in front of the user, since
+        // the row the cursor was on has just been replaced.
+        window.setTimeout(() => focus(result.canRestart ? 'update:restart' : 'update:close'), 0)
+        // The launcher has to reopen to be the new version, so it does — after
+        // a countdown the user can stop. A Flatpak restarts through the host,
+        // an AppImage through Electron; neither is something the renderer has
+        // to know about.
+        if (result.canRestart) setRestartIn(RESTART_COUNTDOWN_S)
+      }
+    } finally {
+      setUpdateApplying(false)
+    }
+  }, [update?.latestVersion, focus])
 
   /**
    * Hands a power action to logind.
@@ -632,7 +894,13 @@ export function App(): ReactNode {
 
     // A layer on its way out still owns the screen; input during those few
     // frames would act on something the user can no longer see.
-    if (detailsClosing || searchClosing || shotsClosing || powerClosing) return
+    if (detailsClosing || searchClosing || shotsClosing || powerClosing || updateClosing) return
+
+    // An update being installed is the one modal state the launcher does not
+    // let you leave. Closing would not stop the download, and a dialog that
+    // says "installing" while the user is back on the grid is a lie about what
+    // the machine is doing. It is seconds long and it ends by itself.
+    if (updateApplying) return
 
     const detailsOpen = detailsGame !== null
 
@@ -641,14 +909,15 @@ export function App(): ReactNode {
         if (!shotsOpen) confirm()
         break
       case 'back':
-        if (powerOpen) closePower()
+        if (updateOpen) closeUpdate()
+        else if (powerOpen) closePower()
         else if (shotsOpen) closeShots()
         else if (detailsOpen) closeDetails()
         else if (searchOpen) closeSearch()
         else if (view !== 'library') setView('library')
         break
       case 'search':
-        if (shotsOpen || powerOpen) break
+        if (shotsOpen || powerOpen || updateOpen) break
         // Inside the panel X is not "search" — there is nothing to search — so
         // it carries the one action the face buttons had no room for.
         if (detailsOpen) {
@@ -659,7 +928,7 @@ export function App(): ReactNode {
         else openSearch()
         break
       case 'menu':
-        if (!searchOpen && !detailsOpen && !shotsOpen && !powerOpen) {
+        if (!searchOpen && !detailsOpen && !shotsOpen && !powerOpen && !updateOpen) {
           setView((current) => (current === 'settings' ? 'library' : 'settings'))
         }
         break
@@ -667,7 +936,7 @@ export function App(): ReactNode {
       // the user has left over. On the grid that is the one-press launch that A
       // used to be; in the details panel it is the way back out.
       case 'start':
-        if (shotsOpen || powerOpen) break
+        if (shotsOpen || powerOpen || updateOpen) break
         if (detailsOpen) closeDetails()
         else launchFocused()
         break
@@ -682,6 +951,7 @@ export function App(): ReactNode {
           !detailsOpen &&
           !searchOpen &&
           !powerOpen &&
+          !updateOpen &&
           view !== 'settings' &&
           view !== 'status' &&
           view !== 'recent' &&
@@ -697,7 +967,15 @@ export function App(): ReactNode {
   })
 
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
-    setSettings(await window.launcher.settings.update(patch))
+    try {
+      setSettings(await window.launcher.settings.update(patch))
+    } catch (error) {
+      // Main keeps a write failure to itself and returns the value anyway, so
+      // this only fires if the bridge did — but every row on the Settings
+      // screen ends here, and an unhandled rejection would leave one of them
+      // as a control that does nothing and says nothing.
+      console.error('Settings could not be updated:', error)
+    }
   }, [])
 
   const refreshCatalog = useCallback(async () => {
@@ -710,6 +988,13 @@ export function App(): ReactNode {
       // stop waiting on it and show what there is.
       if (snapshot.source === 'fixture') setFixturesAreFinal(true)
       setProviders(await window.launcher.library.providers())
+    } catch (error) {
+      // `catalog:refresh` degrades rather than throwing, so reaching here means
+      // the bridge itself did — and the important part is not the message, it
+      // is releasing `catalogPending`. Without that the launcher waits on a
+      // refresh that has already failed, forever, behind a loading bar.
+      console.error('Catalogue refresh failed:', error)
+      setFixturesAreFinal(true)
     } finally {
       setRefreshing(false)
     }
@@ -741,10 +1026,16 @@ export function App(): ReactNode {
    */
   useEffect(() => {
     if (view !== 'status') return
+    // Guarded, like the mount-time effects: this one runs during the commit
+    // that switches to the view, so with no bridge it would take the whole
+    // interface down rather than leaving an empty board behind the footer's
+    // report of why.
+    if (!window.launcher) return
     setStatusLoading(true)
     void window.launcher.status
       .get()
       .then(setStatus)
+      .catch((error: unknown) => console.error('The status board could not be read:', error))
       .finally(() => setStatusLoading(false))
   }, [view])
 
@@ -806,6 +1097,134 @@ export function App(): ReactNode {
     void refreshCatalog()
   }, [catalogSource, refreshCatalog])
 
+  /**
+   * Asks GitHub whether there is a newer launcher, once per run.
+   *
+   * Off the first-paint path, like every other network call here: nobody who
+   * opened the launcher to play a game is waiting on a release feed.
+   *
+   * Called unconditionally even though the check is a preference, because main
+   * owns that decision — with the toggle off it answers out of what it already
+   * knows and touches no network, and the Settings nameplate still gets a
+   * version to print. The renderer asking "may I?" first would put the same
+   * rule in two places.
+   */
+  useEffect(() => {
+    void window.launcher?.update
+      .check(false)
+      .then(setUpdate)
+      // `update:check` degrades rather than throwing, so this only fires if the
+      // bridge did. Caught anyway: an unhandled rejection here is invisible, and
+      // this call also supplies the version the footer and the Settings
+      // nameplate print.
+      .catch((error: unknown) => console.error('Update check failed:', error))
+  }, [])
+
+  /**
+   * Where the log file is.
+   *
+   * Asked for once, off the first-paint path like every other call that is not
+   * needed to draw the grid. It is only ever printed — on the Settings
+   * nameplate and on the crash screen — so nothing waits on it.
+   */
+  useEffect(() => {
+    void window.launcher?.app
+      .diagnostics()
+      .then((diagnostics) => setLogPath(diagnostics.logPath))
+      .catch((error: unknown) => console.error('Diagnostics could not be read:', error))
+  }, [])
+
+  /**
+   * Puts the notice up, once, when there is something to say and room to say it.
+   *
+   * Separate from the check above because the two have different timing: the
+   * check is a background request that may land while the grid is still
+   * loading, and a modal that appears over a half-drawn screen — or over an
+   * open details panel — reads as an interruption rather than as news. So it
+   * waits for the launcher to be sitting still.
+   *
+   * A version the user has already dismissed is not news either. That is what
+   * makes "Not now" mean something.
+   */
+  useEffect(() => {
+    if (updateShown.current || overlayOpen || catalogPending) return
+    if (!settings || !update?.available) return
+    if (update.latestVersion === settings.dismissedUpdate) return
+    openUpdate(update)
+  }, [update, settings, overlayOpen, catalogPending, openUpdate])
+
+  /**
+   * Byte counts during a download.
+   *
+   * The one thing main pushes rather than answers, and the subscription is torn
+   * down with the component — the preload hands back its own unsubscribe, so
+   * this is the whole cleanup.
+   */
+  //
+  // Optional, like the two effects above it, and for a reason worth naming: this
+  // one runs on mount and *synchronously*. Reaching through a bridge that failed
+  // to load throws during the commit, React unmounts the tree, and the crash
+  // screen replaces the launcher — which means the `bootError` the first effect
+  // exists to display could never be read. The honest report of a missing
+  // preload has to outlive the missing preload.
+  useEffect(() => window.launcher?.update.onProgress(setUpdateProgress), [])
+
+  /**
+   * Counts down to the restart, then asks for it.
+   *
+   * One second per tick rather than a single timeout, because the number on
+   * screen is the whole point — a silent ten-second wait before the launcher
+   * vanishes is indistinguishable from a crash.
+   *
+   * It stops at zero rather than going negative: `restartIn === 0` is the state
+   * the notice renders as "Restarting…", and it is also what keeps this from
+   * asking twice if the quit takes a moment to arrive.
+   */
+  useEffect(() => {
+    if (restartIn === null) return
+    if (restartIn === 0) {
+      void window.launcher.update
+        .restart()
+        .then((restarting) => {
+          // Main refuses rather than quitting when it cannot bring the launcher
+          // back — a Flatpak with the host permission revoked is the case that
+          // matters. Without this the notice would sit on "Restarting…" for a
+          // restart that is never coming, which is the one failure on this path
+          // nobody three metres away can diagnose.
+          if (!restarting) {
+            setRestartIn(null)
+            setRestartRefused(true)
+          }
+        })
+        .catch((error: unknown) => {
+          console.error('Restart request failed:', error)
+          setRestartIn(null)
+          setRestartRefused(true)
+        })
+      return
+    }
+    const timer = window.setTimeout(() => setRestartIn((left) => (left ?? 1) - 1), 1000)
+    return () => window.clearTimeout(timer)
+  }, [restartIn])
+
+  /** Restarts now, cutting the countdown short. */
+  const restartNow = useCallback(() => setRestartIn(0), [])
+
+  /** Re-checks now, ignoring the cache. What the Settings row calls. */
+  const checkUpdate = useCallback(async () => {
+    setUpdateChecking(true)
+    try {
+      const status = await window.launcher.update.check(true)
+      setUpdate(status)
+      // Straight into the notice when there is one: the row was pressed to find
+      // out, and making the user find a second control to read the answer would
+      // be a step for nothing. No update, and the row says so under itself.
+      if (status.available) openUpdate(status)
+    } finally {
+      setUpdateChecking(false)
+    }
+  }, [openUpdate])
+
   const signIn = useCallback(async () => {
     setSigningIn(true)
     setAuthError(null)
@@ -842,7 +1261,16 @@ export function App(): ReactNode {
    * A means Play, Set store or View depending on what the cursor is sitting on,
    * and a footer that says "Play" while A sets a store is worse than no footer.
    */
-  const legend: LegendEntry[] = powerOpen
+  const legend: LegendEntry[] = updateOpen
+    ? // Deliberately empty while an update installs: there is no button, and a
+      // legend naming one that does nothing is worse than a bare footer.
+      updateApplying
+      ? []
+      : [
+          { action: 'confirm', label: 'Select' },
+          { action: 'back', label: 'Close' }
+        ]
+    : powerOpen
     ? [
         { action: 'confirm', label: 'Select' },
         { action: 'back', label: 'Cancel' }
@@ -951,12 +1379,20 @@ export function App(): ReactNode {
                 authenticated={authenticated}
                 signingIn={signingIn}
                 authError={authError}
+                update={update}
+                updateChecking={updateChecking}
+                appVersion={update?.currentVersion ?? null}
+                logPath={logPath}
                 onUpdate={updateSettings}
                 onRefreshCatalog={refreshCatalog}
                 onSyncAll={() => void syncAllStores()}
                 onOpenGfn={() => void openGfnApp()}
                 onSignIn={signIn}
                 onSignOut={signOut}
+                onCheckUpdate={() => void checkUpdate()}
+                onShowUpdate={() => {
+                  if (update) openUpdate(update)
+                }}
               />
             </>
           ) : view === 'support' ? (
@@ -1080,6 +1516,22 @@ export function App(): ReactNode {
             onClose={closePower}
           />
         )}
+
+        {updateOpen && update && (
+          <UpdateDialog
+            status={update}
+            progress={updateProgress}
+            applying={updateApplying}
+            result={updateResult}
+            restartIn={restartIn}
+            restartRefused={restartRefused}
+            closing={updateClosing}
+            onApply={() => void applyUpdate()}
+            onRestart={restartNow}
+            onDismiss={dismissUpdate}
+            onClose={closeUpdate}
+          />
+        )}
       </div>
 
       <LaunchNotice notice={launchNotice} />
@@ -1091,12 +1543,23 @@ export function App(): ReactNode {
         scheme={scheme}
         signal={signalState}
         version={client?.version ?? null}
+        // Off the update status rather than a channel of its own: main answers
+        // `currentVersion` whether or not the check is allowed to touch the
+        // network, which is exactly why the Settings nameplate reads it there
+        // too. Null until that first call lands, and the footer simply has one
+        // fewer item until it does.
+        appVersion={update?.currentVersion ?? null}
         status={
-          !windowFocused
-            ? 'WINDOW NOT FOCUSED — PAD INPUT PAUSED'
-            : !connected
-              ? 'NO GAMEPAD DETECTED — USING ARROW KEYS'
-              : null
+          // Ahead of both of the others: with no bridge there is nothing for a
+          // pad to drive, so reporting on the pad would be describing the wrong
+          // problem.
+          bootError
+            ? bootError
+            : !windowFocused
+              ? 'WINDOW NOT FOCUSED — PAD INPUT PAUSED'
+              : !connected
+                ? 'NO GAMEPAD DETECTED — USING ARROW KEYS'
+                : null
         }
       />
     </div>

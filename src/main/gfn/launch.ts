@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process'
 import type { LaunchRequest, LaunchResult } from '@shared/types'
 import { hostSpawn } from '../host'
 import { GFN_APP_ID, GFN_CEF_BINARY, GFN_CEF_DIR, isGfnRunning, killGfn } from './flatpak'
@@ -55,18 +56,34 @@ export function buildOpenArgv(): string[] {
  * a malformed payload throws a TypeError that crosses the bridge as a rejected
  * promise, which is the one shape the renderer does not model.
  */
+/**
+ * Ceiling on any one field.
+ *
+ * The values these fields really carry are a nine-digit catalog id and a slug —
+ * `witcher3` — so this is two orders of magnitude of headroom, not a limit
+ * anything real will meet. It is here because these four strings are the only
+ * renderer-supplied values in the launcher that become *argv*: `URLSearchParams`
+ * makes them harmless to parse, and does nothing about length, so a forged
+ * megabyte would come back as a bare `E2BIG` from `spawn` with nothing to say
+ * which control produced it.
+ */
+const MAX_FIELD_CHARS = 512
+
 export function isLaunchRequest(value: unknown): value is LaunchRequest {
   if (typeof value !== 'object' || value === null) return false
   const input = value as Partial<LaunchRequest>
 
+  const identifier = (field: unknown): boolean =>
+    typeof field === 'string' && field.length > 0 && field.length <= MAX_FIELD_CHARS
+
   const optional = (field: unknown): boolean =>
-    field === undefined || field === null || typeof field === 'string'
+    field === undefined ||
+    field === null ||
+    (typeof field === 'string' && field.length <= MAX_FIELD_CHARS)
 
   return (
-    typeof input.cmsId === 'string' &&
-    input.cmsId.length > 0 &&
-    typeof input.gameId === 'string' &&
-    input.gameId.length > 0 &&
+    identifier(input.cmsId) &&
+    identifier(input.gameId) &&
     optional(input.shortName) &&
     optional(input.parentGameId)
   )
@@ -81,7 +98,27 @@ export function isLaunchRequest(value: unknown): value is LaunchRequest {
  */
 const KILL_SETTLE_MS = 2_000
 
-export async function launchGame(request: LaunchRequest): Promise<LaunchResult> {
+export interface LaunchHooks {
+  /**
+   * Handed the live `flatpak run` handle the moment the spawn is confirmed,
+   * which is also the moment `ok: true` is decided — so it fires exactly when a
+   * launch succeeded, and never otherwise.
+   *
+   * A callback rather than a field on `LaunchResult`: that object is structured
+   * -cloned across the IPC bridge and a `ChildProcess` on it would throw on the
+   * way out. It also leaves the policy question — what to do when the client
+   * dies — with `ipc.ts`, which owns the window, rather than here.
+   *
+   * The handle has to be *held* by whoever takes it. An unref'd child nobody
+   * references is collectable, and a collected handle delivers no `exit` event.
+   */
+  onSpawned?: (child: ChildProcess) => void
+}
+
+export async function launchGame(
+  request: LaunchRequest,
+  hooks: LaunchHooks = {}
+): Promise<LaunchResult> {
   if (!isLaunchRequest(request)) {
     return { ok: false, command: null, error: 'Malformed launch request', mode: 'native' }
   }
@@ -93,24 +130,32 @@ export async function launchGame(request: LaunchRequest): Promise<LaunchResult> 
   // a game exits, so this is the normal state from the second launch onwards.
   const replacedRunningClient = await isGfnRunning()
   if (replacedRunningClient) {
+    // Logged because this is a two-second pause with nothing on screen to
+    // explain it, and because "the second launch of the session behaves
+    // differently" is the shape of half the launch reports here.
+    console.info(`A client is already running; killing it and waiting ${KILL_SETTLE_MS} ms.`)
     await killGfn()
     await delay(KILL_SETTLE_MS)
   }
 
-  const result = await spawnFlatpak(buildLaunchArgv(request), 'native')
+  const result = await spawnFlatpak(buildLaunchArgv(request), 'native', hooks)
   return { ...result, replacedRunningClient }
 }
 
 /** Starts the GFN client with no game. See `buildOpenArgv`. */
-export async function openGfnClient(): Promise<LaunchResult> {
-  return spawnFlatpak(buildOpenArgv(), 'native')
+export async function openGfnClient(hooks: LaunchHooks = {}): Promise<LaunchResult> {
+  return spawnFlatpak(buildOpenArgv(), 'native', hooks)
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function spawnFlatpak(argv: string[], mode: 'native'): Promise<LaunchResult> {
+function spawnFlatpak(
+  argv: string[],
+  mode: 'native',
+  hooks: LaunchHooks = {}
+): Promise<LaunchResult> {
   return new Promise<LaunchResult>((resolve) => {
     // `hostSpawn` is what makes this work from inside a Flatpak, where `flatpak`
     // is not on the sandbox's PATH. `buildLaunchArgv` stays innocent of that:
@@ -123,11 +168,17 @@ function spawnFlatpak(argv: string[], mode: 'native'): Promise<LaunchResult> {
     const { child, printable } = hostSpawn('flatpak', argv)
 
     child.once('error', (err) => {
+      // `LaunchNotice` shows this for eight seconds and then it is gone; the
+      // log is where it is still available when somebody asks what happened.
+      console.error(`Launch failed: ${printable} — ${err.message}`)
       resolve({ ok: false, command: printable, error: err.message, mode })
     })
 
     child.once('spawn', () => {
       child.unref()
+      // Before `resolve`, so nobody downstream can observe a successful launch
+      // that the session watch has not been offered yet.
+      hooks.onSpawned?.(child)
       resolve({ ok: true, command: printable, error: null, mode })
     })
   })

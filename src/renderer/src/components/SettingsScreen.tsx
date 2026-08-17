@@ -1,6 +1,6 @@
 import { type ComponentType, type ReactNode } from 'react'
-import { ExternalLink, LogIn, LogOut, RefreshCw } from 'lucide-react'
-import type { LaunchMode, LinkedProvider, Settings } from '@shared/types'
+import { ArrowUpCircle, ExternalLink, LogIn, LogOut, RefreshCw } from 'lucide-react'
+import type { LaunchMode, LinkedProvider, Settings, UpdateStatus } from '@shared/types'
 import {
   ACCENT_PRESETS,
   accentPreset,
@@ -13,7 +13,6 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 
 /**
@@ -97,6 +96,42 @@ function ActionRow({
   )
 }
 
+/**
+ * The switch, drawn rather than instantiated.
+ *
+ * It used to be the real shadcn `Switch`, rendered inert — which reads well
+ * until you notice what it is: Radix's `Switch` is a `<button>`, and `Row` is a
+ * `<button>`. Interactive content nested inside a button is invalid HTML, and
+ * React says so out loud: two `console.error`s and a twenty-line component
+ * stack, on every visit to this screen. Since `log.ts` tees the renderer's
+ * console into the file the README asks people to attach to a bug report, the
+ * cost was not a warning nobody sees — it was the launcher filling its own
+ * one-megabyte log with a complaint about itself.
+ *
+ * So the indicator is spans, with the same geometry, the same tokens and the
+ * same 150 ms transition as the component it replaces. Nothing is lost: the row
+ * already carries `role="switch"` and `aria-checked`, the confirm is the row's,
+ * and nothing in this interface ever takes real DOM focus.
+ */
+function SwitchIndicator({ checked }: { checked: boolean }): ReactNode {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-colors duration-150',
+        checked ? 'bg-primary' : 'bg-input/80'
+      )}
+    >
+      <span
+        className={cn(
+          'block size-4 rounded-full transition-transform duration-150',
+          checked ? 'bg-primary-foreground translate-x-[calc(100%-2px)]' : 'bg-foreground translate-x-0'
+        )}
+      />
+    </span>
+  )
+}
+
 function ToggleRow({
   value,
   ...row
@@ -105,13 +140,7 @@ function ToggleRow({
 }): ReactNode {
   return (
     <Row {...row} role="switch" checked={value}>
-      {/*
-        The real shadcn Switch, rendered inert: the row already carries
-        `role="switch"` and owns the confirm, so this is the indicator, not a
-        second control. It can be a Radix button safely only because nothing
-        here ever takes real DOM focus.
-      */}
-      <Switch checked={value} tabIndex={-1} aria-hidden className="pointer-events-none" />
+      <SwitchIndicator checked={value} />
     </Row>
   )
 }
@@ -368,12 +397,18 @@ export function SettingsScreen({
   authenticated,
   signingIn,
   authError,
+  update,
+  updateChecking,
+  appVersion,
+  logPath,
   onUpdate,
   onRefreshCatalog,
   onSyncAll,
   onOpenGfn,
   onSignIn,
-  onSignOut
+  onSignOut,
+  onCheckUpdate,
+  onShowUpdate
 }: {
   settings: Settings | null
   providers: LinkedProvider[]
@@ -396,12 +431,29 @@ export function SettingsScreen({
   authenticated: boolean
   signingIn: boolean
   authError: string | null
+  /** What the last update check found. Null before one has run. */
+  update: UpdateStatus | null
+  updateChecking: boolean
+  /** This build's version, for the nameplate. Comes from the check. */
+  appVersion: string | null
+  /**
+   * Absolute path of the launcher's log file, or null before main has answered.
+   *
+   * Printed rather than acted on. It is here because a bug report that opens
+   * with "which file do I attach?" is one most people do not open at all, and
+   * the path differs between the Flatpak and every other install form — so
+   * telling someone to "look in the usual place" is not an answer either.
+   */
+  logPath: string | null
   onUpdate: (patch: Partial<Settings>) => void
   onRefreshCatalog: () => void
   onSyncAll: () => void
   onOpenGfn: () => void
   onSignIn: () => void
   onSignOut: () => void
+  onCheckUpdate: () => void
+  /** Re-opens the notice for an update already found — what "Not now" undoes. */
+  onShowUpdate: () => void
 }): ReactNode {
   if (!settings) {
     return (
@@ -413,6 +465,9 @@ export function SettingsScreen({
   }
 
   const canSync = authenticated && providers.length > 0
+  const hasUpdate = update?.available === true
+  /** A check that ran, succeeded, and found nothing — not merely "no update yet". */
+  const upToDate = update !== null && !update.available && update.error === null
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto scroll-py-4 px-10 pt-3 pb-10">
@@ -517,18 +572,14 @@ export function SettingsScreen({
             id="setting:fullscreen"
             scope={scope}
             label="Open fullscreen"
-            description="Takes the whole screen on launch. Applies next time the launcher starts."
+            // Not "applies next time": `settings:update` hands this straight to
+            // `setFullscreen`, and it has to — there is no F11 on a sofa, so
+            // this row is the only way a gamepad can put a launcher that ended
+            // up windowed back to full screen. A description that told the user
+            // to restart for it would hide the one control that fixes it.
+            description="Takes the whole screen, now and on every start."
             value={settings.fullscreen}
             onConfirm={() => onUpdate({ fullscreen: !settings.fullscreen })}
-          />
-          <Separator className="my-1" />
-          <ToggleRow
-            id="setting:hideOnLaunch"
-            scope={scope}
-            label="Step aside when a game starts"
-            description="Minimises the launcher once GeForce NOW takes over, so the two do not fight for focus. Ignored by the web player, which is a launcher window itself."
-            value={settings.hideOnLaunch}
-            onConfirm={() => onUpdate({ hideOnLaunch: !settings.hideOnLaunch })}
           />
           <Separator className="my-1" />
           <LaunchModeRow
@@ -590,6 +641,74 @@ export function SettingsScreen({
                 ? 'GeForce NOW Flatpak not readable'
                 : 'GeForce NOW Flatpak not detected'}
           </p>
+        </Section>
+
+        {/* Last, and directly under the client's version line: the two
+            nameplates answer the same question about two different programs,
+            and reading them together is how you tell which one is behind. */}
+        <Section title="This launcher">
+          <ToggleRow
+            id="setting:updateCheck"
+            scope={scope}
+            label="Look for new versions"
+            description="Asks GitHub once each time the launcher starts, and tells you when a release is newer than this one. Nothing is installed without you saying so."
+            value={settings.updateCheck}
+            onConfirm={() => onUpdate({ updateCheck: !settings.updateCheck })}
+          />
+
+          <Separator className="my-1" />
+
+          <ActionRow
+            id="setting:update"
+            scope={scope}
+            label={hasUpdate ? `Version ${update?.latestVersion} is available` : 'Check for updates'}
+            description={
+              hasUpdate
+                ? // The notice carries the release notes and the install
+                  // button; this row is the way back to it after "Not now".
+                  'Opens the release notes and installs it from here, where this build can.'
+                : updateChecking
+                  ? 'Asking GitHub…'
+                  : upToDate
+                    ? 'This is the newest release. Checks again for one now.'
+                    : 'Asks GitHub whether a newer launcher has been released.'
+            }
+            icon={hasUpdate ? ArrowUpCircle : RefreshCw}
+            busy={updateChecking}
+            disabled={updateChecking}
+            onConfirm={hasUpdate ? onShowUpdate : onCheckUpdate}
+          />
+
+          {/* A failed check is a fact about the network, not about the version,
+              so it goes under the row rather than into the label. */}
+          {update?.error && (
+            <p className="text-destructive px-4 pb-2 text-xs">{update.error}</p>
+          )}
+
+          <p className="text-muted-foreground px-4 pt-1 pb-2 font-mono text-xs">
+            {appVersion ? `gfn-launcher · v${appVersion}` : 'gfn-launcher'}
+            {update?.channel && update.channel !== 'unknown' && ` · ${update.channel}`}
+          </p>
+
+          {/* Directly under the nameplate, because the two are read together:
+              the version says which build misbehaved and this says where the
+              account of it is. Not focusable and not a control — there is
+              nothing here to press, and the path is the whole message. */}
+          {logPath && (
+            <>
+              <Separator className="my-1" />
+              <div className="px-4 pt-2 pb-1">
+                <p className="text-sm font-medium">Log file</p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Attach this file when reporting a problem. Credentials are stripped from it
+                  before anything is written, but it does contain file paths from this machine.
+                </p>
+                <p className="text-muted-foreground mt-2 font-mono text-xs break-all">
+                  {logPath}
+                </p>
+              </div>
+            </>
+          )}
         </Section>
       </div>
     </div>

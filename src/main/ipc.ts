@@ -5,6 +5,7 @@ import type {
   AuthResult,
   AuthStatus,
   CatalogSnapshot,
+  Diagnostics,
   GameDetails,
   GfnClientInfo,
   GfnGame,
@@ -16,12 +17,17 @@ import type {
   StatusSnapshot,
   StoreMutationResult,
   SyncAllResult,
-  SyncResult
+  SyncResult,
+  UpdateApplyResult,
+  UpdateStatus
 } from '@shared/types'
 import { resolveLaunchPath } from '@shared/games'
 import { isPowerAction, runPowerAction } from './power'
 import { createDisplayWakeLock } from './displaySleep'
+import { IS_SANDBOXED } from './host'
+import { logFilePath } from './log'
 import { detectGfn } from './gfn/flatpak'
+import { armHandback, disarmHandback } from './gfn/handback'
 import { isLaunchRequest, launchGame, openGfnClient } from './gfn/launch'
 import { launchViaWeb } from './gfn/webStream'
 import { getCatalog, markOwned, markSelected, patchGame, refreshCatalog } from './gfn/catalog'
@@ -34,49 +40,11 @@ import { ensureSession, isAuthenticated, signIn, signOut } from './gfn/session'
 import { listRecent, recordPlay } from './recent'
 import { getStatus, refreshStatus } from './status'
 import { getSettings, updateSettings } from './settings'
+import { applyUpdate, getUpdateStatus, restartIntoUpdate, updateChannel } from './update'
 import { applyUiScale } from './uiScale'
+import { restoreLauncher, setFullscreen, stepAside } from './window'
 
 const NOT_CONNECTED = 'Not connected to a GeForce NOW session'
-
-/**
- * Gets the launcher off the screen without closing it.
- *
- * **Fullscreen first, then minimise.** On Linux `minimize()` is a request to the
- * window manager, and a good many of them — plus Wayland compositors, where
- * `set_minimized` is explicitly a hint — ignore an iconify request aimed at a
- * fullscreen surface. Dropping fullscreen makes it an ordinary window first, so
- * the request is one the compositor will honour. The failure it avoids is silent:
- * the launcher simply stays on top of whatever it was stepping aside for.
- *
- * `main/index.ts` puts fullscreen back when the window is restored.
- *
- * Shared by "Back to desktop" and by `hideOnLaunch`, because two minimise paths
- * would drift and only one of them would ever get fixed.
- */
-function stepAside(window: BrowserWindow | null): void {
-  // `mainWindow` is never cleared, so this can be handed a destroyed window;
-  // calling into one throws, and inside `gfn:launch` that would report a failure
-  // for a game that had already started.
-  if (!window || window.isDestroyed()) return
-  if (window.isFullScreen()) window.setFullScreen(false)
-  window.minimize()
-}
-
-/**
- * Brings the launcher back after a window we own closed on top of it.
- *
- * The mirror of `stepAside`, and the same reasoning as the `second-instance`
- * handler in `main/index.ts`: fullscreen has to be re-applied from settings or
- * the launcher returns as a 1600x900 desktop app and stays one. Only the web
- * stream path needs this — the native client is somebody else's process, so
- * there is no close event to hang it off.
- */
-async function restoreLauncher(window: BrowserWindow | null): Promise<void> {
-  if (!window || window.isDestroyed()) return
-  if (window.isMinimized()) window.restore()
-  if ((await getSettings()).fullscreen) window.setFullScreen(true)
-  window.focus()
-}
 
 /**
  * All privileged work lives behind these handlers. The renderer never spawns a
@@ -96,6 +64,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     // guards its union: an unchecked payload becomes a TypeError, and a
     // rejected promise is the one result shape the renderer cannot render.
     if (!isLaunchRequest(request)) {
+      console.error('Refused a malformed launch request from the renderer.')
       return {
         ok: false,
         command: null,
@@ -104,38 +73,74 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     }
 
+    // Before anything else, and specifically before `launchGame` — whose first
+    // act is `killGfn()`. A watch left armed by the previous launch would read
+    // that kill as "the session ended", find the client gone during
+    // `KILL_SETTLE_MS`, and raise the launcher on top of a launch two seconds
+    // from spawning.
+    disarmHandback()
+
     const settings = await getSettings()
-    const path = resolveLaunchPath(settings.launchMode, (await detectGfn()).installed)
+    const installed = (await detectGfn()).installed
+    const path = resolveLaunchPath(settings.launchMode, installed)
+
+    // The decision, not just the outcome. `launchMode: auto` silently choosing
+    // the web player because a probe came back false is the most confusing
+    // thing this launcher can do — `LaunchMode` refuses to make it the default
+    // for exactly that reason — and this line is what makes it visible after
+    // the fact rather than something the user has to guess at.
+    console.info(
+      `Launching ${request.gameId} (variant ${request.cmsId}) via ${path} ` +
+        `[mode=${settings.launchMode}, client ${installed ? 'installed' : 'not installed'}]`
+    )
 
     const result =
       path === 'web'
         ? await launchViaWeb(request, () => void restoreLauncher(getWindow()))
-        : await launchGame(request)
+        : await launchGame(request, {
+            // Armed on the spawn rather than after the await, so the watch
+            // exists before the client can possibly have finished a session.
+            onSpawned: (child) =>
+              armHandback({
+                child,
+                autoClose: true,
+                onClientGone: () => void restoreLauncher(getWindow())
+              })
+          })
 
     if (result.ok) {
       // The one choke point downstream of a confirmed start, so it is where
       // play history is written. `gameId`, not `cmsId`: the latter is the
       // store edition GFN was handed, which does not match a tile.
       await recordPlay(request.gameId)
-
-      // Never on the web path: that stream is our own window, and a minimised
-      // launcher behind it could not be raised again once it closed — the pad
-      // cannot focus a blurred window. `restoreLauncher` handles the way back.
-      if (path === 'native' && settings.hideOnLaunch) {
-        // GFN takes over the screen; stepping aside avoids fighting it for
-        // focus, which would also kill our own gamepad input.
-        stepAside(getWindow())
-      }
     }
+
+    // **The launcher deliberately does not step aside here.** GFN opens
+    // fullscreen on top of it on its own, and an iconified launcher is one the
+    // pad cannot raise — which used to make quitting a game a dead end. It stays
+    // where it is and `armHandback` brings it back to the front when the client
+    // goes away.
 
     return result
   })
 
   ipcMain.handle(IPC.gfnOpen, async (): Promise<LaunchResult> => {
-    const result = await openGfnClient()
-    // Unconditional, unlike `hideOnLaunch`: the point of this button is to put
-    // the user in front of the GFN window, and a fullscreen launcher sitting on
-    // top of it would make the button look like it did nothing.
+    disarmHandback()
+    const result = await openGfnClient({
+      // `autoClose: false`: the user asked for the real client on purpose, so
+      // nothing here ends it. The watch is still worth arming — this path
+      // minimises unconditionally, and the pad cannot raise a blurred window, so
+      // the way back matters more here rather than less.
+      onSpawned: (child) =>
+        armHandback({
+          child,
+          autoClose: false,
+          onClientGone: () => void restoreLauncher(getWindow())
+        })
+    })
+    // Unlike the launch path above: the point of this button is to put the user
+    // in front of the GFN window for the things the launcher does not mirror,
+    // and a fullscreen launcher on top of it would make the button look broken.
     if (result.ok) stepAside(getWindow())
     return result
   })
@@ -158,7 +163,17 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   })
 
   ipcMain.handle(IPC.authSignOut, async (): Promise<void> => {
-    await signOut()
+    // `clearStorageData` reaching into Chromium's session store can fail, and a
+    // rejection here crosses as a rejected promise — the one shape the renderer
+    // does not model, which would leave "Sign out" as a control that does
+    // nothing. The in-memory session is dropped either way, so the worst case
+    // is a persisted cookie jar that outlives the sign-out, which the next
+    // sign-in overwrites.
+    try {
+      await signOut()
+    } catch (error) {
+      console.error('Sign-out could not clear the stored session:', error)
+    }
     await updateSettings({ gfnLinked: false })
   })
 
@@ -287,7 +302,17 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     }
 
-    return { ok: true, error: null, game: await patchGame(cmsId, patch) }
+    try {
+      return { ok: true, error: null, game: await patchGame(cmsId, patch) }
+    } catch (error) {
+      // The mutation itself succeeded — GFN has recorded it — and only mirroring
+      // it into the four-megabyte cache failed. Rejecting here would cross the
+      // bridge as a rejected promise, which the renderer does not model, and
+      // would report a change that did happen as one that did not. The next
+      // refresh brings the same answer back from NVIDIA on its own.
+      console.error('Store mutation succeeded but the catalogue cache could not be updated:', error)
+      return { ok: false, error: 'The change was saved, but this launcher could not record it.', game: null }
+    }
   }
 
   ipcMain.handle(
@@ -325,8 +350,81 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // the scale row, and a size control that only takes effect next start is
       // a control nobody can judge.
       if (patch.uiScale !== undefined) applyUiScale(getWindow(), next.uiScale)
+      // Same reason, plus one this row has to itself: there is no F11 on a
+      // sofa, so this toggle is the only way a gamepad can put a launcher that
+      // ended up windowed back to fullscreen.
+      if (patch.fullscreen !== undefined) setFullscreen(getWindow(), next.fullscreen)
       return next
     }
+  )
+
+  /**
+   * Whether there is a newer launcher.
+   *
+   * `force` is validated the way every other payload on this boundary is, even
+   * though the worst a forged one could do is skip a cache: the rule is that
+   * the channel is where the renderer stops being ours, and an exception with a
+   * good excuse is how the rule stops being followed.
+   */
+  ipcMain.handle(
+    IPC.updateCheck,
+    async (_event, force: unknown): Promise<UpdateStatus> => getUpdateStatus(force === true)
+  )
+
+  /**
+   * Installs it, reporting progress to whoever asked.
+   *
+   * Progress goes to `event.sender` rather than to the main window: it belongs
+   * to this request, and a window that navigated away mid-download is not a
+   * reason to throw.
+   */
+  ipcMain.handle(IPC.updateApply, async (event): Promise<UpdateApplyResult> => {
+    const result = await applyUpdate((progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC.updateProgress, progress)
+    })
+
+    // The one operation here that rewrites the launcher's own files, so its
+    // outcome is written down whichever way it went.
+    if (result.ok) console.info(`Update installed via ${result.command ?? 'unknown command'}.`)
+    else console.error(`Update not installed: ${result.error ?? 'no reason given'}`)
+
+    return result
+  })
+
+  /**
+   * Restarts into the version just installed, or says it could not.
+   *
+   * The boolean is the whole point of the change. `restartIntoUpdate` refuses
+   * rather than quitting whenever it cannot bring the launcher back — a Flatpak
+   * with `--talk-name=org.freedesktop.Flatpak` revoked being the case that
+   * matters — and a refusal the renderer never heard about leaves the notice
+   * counting down to a restart that is not coming, then sitting on
+   * "Restarting…" for good.
+   */
+  ipcMain.handle(IPC.updateRestart, async (): Promise<boolean> => {
+    const restarting = await restartIntoUpdate()
+    if (!restarting) {
+      console.warn('Restart into update refused: this build cannot restart itself.')
+    }
+    return restarting
+  })
+
+  /**
+   * What to put in a bug report.
+   *
+   * Answered here rather than assembled in the renderer because every field is
+   * a fact only this process holds, and the log path in particular differs
+   * between the Flatpak and everything else. No payload, so nothing to
+   * validate — the same arrangement as `app:openDonation`.
+   */
+  ipcMain.handle(
+    IPC.appDiagnostics,
+    async (): Promise<Diagnostics> => ({
+      logPath: logFilePath(),
+      version: app.getVersion(),
+      channel: updateChannel(),
+      sandboxed: IS_SANDBOXED
+    })
   )
 
   ipcMain.handle(IPC.appQuit, async (): Promise<void> => {
@@ -341,9 +439,16 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     // Validated rather than trusted: whatever arrives here becomes an argument
     // to systemctl, and the channel is where the renderer stops being ours.
     if (!isPowerAction(action)) {
+      console.error(`Refused an unknown power action from the renderer: ${String(action)}`)
       return { ok: false, command: null, error: `Unknown power action: ${String(action)}` }
     }
-    return runPowerAction(action)
+    // Before it runs, not after: `poweroff` and `reboot` never come back, and a
+    // line written afterwards would be a line never written. This is also what
+    // tells the next session's log what ended the last one.
+    console.info(`Power action requested: ${action}`)
+    const result = await runPowerAction(action)
+    if (!result.ok) console.warn(`Power action refused: ${result.error ?? 'no reason given'}`)
+    return result
   })
 
   ipcMain.handle(IPC.appOpenDonation, async (): Promise<OpenResult> => {

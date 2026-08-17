@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { app } from 'electron'
 import { RECENT_LIMIT } from '@shared/types'
+import { writeFileAtomic } from './atomicFile'
 
 /**
  * Play history: which titles were last launched from the launcher.
@@ -84,10 +85,10 @@ export async function recordPlay(cmsId: string, playedAt = new Date().toISOStrin
 
   cached = pushRecent(await load(), cmsId, playedAt)
   try {
-    const path = recentPath()
-    await mkdir(dirname(path), { recursive: true })
     const file: RecentFile = { version: RECENT_FILE_VERSION, entries: cached }
-    await writeFile(path, JSON.stringify(file, null, 2), 'utf8')
+    // Atomic, because the launcher's own power menu can end the session at any
+    // moment and a truncated file costs the whole history — see `atomicFile.ts`.
+    await writeFileAtomic(recentPath(), JSON.stringify(file, null, 2))
   } catch (error) {
     console.warn(
       `Could not write play history: ${error instanceof Error ? error.message : 'unknown error'}`

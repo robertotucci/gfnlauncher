@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyHostFailure, hostCommand, printableCommand } from './host'
+import { classifyHostFailure, hostCommand, hostEnvironment, printableCommand } from './host'
 
 /**
  * The stderr fragments below are transcribed from flatpak 1.18.1, not invented:
@@ -69,6 +69,64 @@ describe('hostCommand', () => {
   })
 })
 
+describe('hostEnvironment', () => {
+  /**
+   * The regression this file exists for most: `EGL_PLATFORM=wayland` is set by
+   * Electron for its own GPU process, and a GeForce NOW client that inherits it
+   * dies with SIGTRAP three seconds after being started. Measured on Electron 43
+   * under KDE Wayland; see `CHROMIUM_INJECTED_ENV`.
+   */
+  it('drops the variable that kills the GeForce NOW client', () => {
+    const env = hostEnvironment({ PATH: '/usr/bin', EGL_PLATFORM: 'wayland' })
+
+    expect(env.EGL_PLATFORM).toBeUndefined()
+    expect(env.PATH).toBe('/usr/bin')
+  })
+
+  it('drops the rest of what Chromium sets for itself', () => {
+    const env = hostEnvironment({
+      GDK_BACKEND: 'wayland',
+      FC_FONTATIONS: '1',
+      NO_AT_BRIDGE: '1',
+      CHROME_DESKTOP: 'io.github.robertotucci.GfnLauncher.desktop'
+    })
+
+    expect(Object.keys(env)).toEqual([])
+  })
+
+  it('keeps everything that came from the session', () => {
+    const session = {
+      HOME: '/home/someone',
+      WAYLAND_DISPLAY: 'wayland-0',
+      XDG_CURRENT_DESKTOP: 'KDE',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus'
+    }
+
+    expect(hostEnvironment(session)).toEqual(session)
+  })
+
+  it('applies overrides, which is how a caller asks for a locale', () => {
+    expect(hostEnvironment({ PATH: '/usr/bin' }, { LC_ALL: 'C' })).toEqual({
+      PATH: '/usr/bin',
+      LC_ALL: 'C'
+    })
+  })
+
+  it('lets a caller set one of the stripped variables on purpose', () => {
+    // Stripping is about not *leaking* ours. A value the caller named is a
+    // decision about the child, and must survive.
+    expect(hostEnvironment({ EGL_PLATFORM: 'wayland' }, { EGL_PLATFORM: 'x11' })).toEqual({
+      EGL_PLATFORM: 'x11'
+    })
+  })
+
+  it('does not mutate the environment it was handed', () => {
+    const base = { EGL_PLATFORM: 'wayland', PATH: '/usr/bin' }
+    hostEnvironment(base)
+    expect(base.EGL_PLATFORM).toBe('wayland')
+  })
+})
+
 describe('printableCommand', () => {
   it('reads as the line a user would have to type', () => {
     expect(printableCommand('flatpak', ['run', 'com.nvidia.geforcenow'])).toBe(
@@ -122,6 +180,44 @@ describe('classifyHostFailure', () => {
       kind: 'failed',
       message: 'Command failed with exit code 4'
     })
+  })
+
+  it('reads a killed command as a timeout, not as the command having failed', () => {
+    // `execFile`'s own timeout kills the child, and what comes back is an error
+    // whose only distinguishing mark is `killed`. Reading it as `failed` would
+    // report "GeForce NOW could not be started" for a portal that had stopped
+    // answering — pointing the user at the wrong program entirely.
+    const failure = classifyHostFailure(
+      Object.assign(new Error('Command failed: flatpak ps'), {
+        killed: true,
+        signal: 'SIGTERM',
+        stderr: ''
+      }),
+      true
+    )
+
+    expect(failure.kind).toBe('timeout')
+    expect(failure.message).toContain('portal')
+  })
+
+  it('decides the timeout before reading stderr, which a killed command may have dirtied', () => {
+    expect(
+      classifyHostFailure({ killed: true, stderr: BLOCKED_STDERR }, true).kind
+    ).toBe('timeout')
+  })
+
+  it('does not read an over-long answer as no answer', () => {
+    // `maxBuffer` overflow sets `killed` too, and means the opposite of a
+    // timeout: the command replied, at length.
+    expect(
+      classifyHostFailure(
+        Object.assign(new Error('stdout maxBuffer length exceeded'), {
+          killed: true,
+          code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+        }),
+        true
+      ).kind
+    ).toBe('failed')
   })
 
   it('reports a missing binary outside a sandbox with the error node gave', () => {

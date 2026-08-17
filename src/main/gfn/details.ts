@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { app } from 'electron'
 import type { GameDetails, GamepadSupport } from '@shared/types'
+import { writeFileAtomic } from '../atomicFile'
 import { imageUrl, pickLaunchVariant, type RawApp, type RawVariant } from './wire'
 
 /**
@@ -140,9 +141,9 @@ let loading: Promise<Record<string, GameDetails>> | null = null
 /** Replaces the in-memory index after a refresh, and persists it. */
 export async function saveDetails(next: Record<string, GameDetails>): Promise<void> {
   index = next
-  const path = detailsPath()
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(next), 'utf8')
+  // Atomic for the same reason `catalog.json` is, and rather more so: this file
+  // is the larger of the two.
+  await writeFileAtomic(detailsPath(), JSON.stringify(next))
 }
 
 /**

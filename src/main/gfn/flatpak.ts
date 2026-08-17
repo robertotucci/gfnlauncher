@@ -66,7 +66,10 @@ export async function isGfnRunning(): Promise<boolean> {
  */
 export async function killGfn(): Promise<void> {
   try {
-    await hostExecFile('flatpak', ['kill', GFN_APP_ID])
+    // `quiet`: exit 1 for "is not running" is this command's ordinary answer on
+    // the first launch of a session, and a warning for it every time would bury
+    // the ones that mean something.
+    await hostExecFile('flatpak', ['kill', GFN_APP_ID], { quiet: true })
   } catch {
     // Already gone, or not ours to kill. The spawn that follows is the thing
     // that actually has to work, and it reports for itself.
@@ -79,6 +82,15 @@ let cachedInfo: GfnClientInfo | null = null
 export async function detectGfn(force = false): Promise<GfnClientInfo> {
   if (cachedInfo && !force) return cachedInfo
   cachedInfo = await probeGfn()
+  // Once per run, because it is memoised — and it is the fact that decides
+  // whether `launchMode: auto` streams in a browser instead of handing the game
+  // to the client, which is the single most confusing outcome this launcher has.
+  console.info(
+    `GeForce NOW client: installed=${cachedInfo.installed} ` +
+      `version=${cachedInfo.version ?? 'unknown'} ` +
+      `path=${cachedInfo.installPath ?? 'none'}` +
+      (cachedInfo.error ? ` — ${cachedInfo.error}` : '')
+  )
   return cachedInfo
 }
 

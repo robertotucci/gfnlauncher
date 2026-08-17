@@ -205,16 +205,24 @@ export interface LaunchResult {
 
 /**
  * Bumped whenever a refresh starts harvesting something a previous one did not,
- * or harvesting it from somewhere better.
+ * harvesting it from somewhere better, or laying it out differently.
  *
  * An older cache is not corrupt, just wrong in ways nothing can see at read
- * time — a catalog written before the details panel existed has no
- * `details.json` beside it, and v4 filled `rtx` from a stale marketing keyword
- * that missed more than half the ray-traced catalog. Both read as perfectly
- * good JSON. Treating the whole file as absent costs one background refresh and
- * fixes itself.
+ * time: a catalog written before the details panel existed has no
+ * `details.json` beside it, one written before `rtx` was read off the public
+ * feed has the badge missing from more than half the ray-traced titles, and one
+ * written before `sortByName` is in whatever order NVIDIA's gateway happened to
+ * return — `sortString: 'ALPHABETICAL'` is sent and not honoured. All of them
+ * read as perfectly good JSON, which is why the version is the only thing that
+ * can tell them apart. Treating the whole file as absent costs one background
+ * refresh and fixes itself.
+ *
+ * The counter starts at 1 with the first public release. The numbers it ran
+ * through before then described caches on development machines and nothing
+ * else, so carrying them forward would have made the first shipped format look
+ * like the seventh.
  */
-export const CATALOG_CACHE_VERSION = 6
+export const CATALOG_CACHE_VERSION = 1
 
 export interface CatalogSnapshot {
   games: GfnGame[]
@@ -279,8 +287,6 @@ export interface Settings {
   autostart: boolean
   /** Start fullscreen. Couch usage wants this on. */
   fullscreen: boolean
-  /** Minimise the launcher once GFN has been handed a game. */
-  hideOnLaunch: boolean
   /**
    * Which way to start a game. See `LaunchMode` — defaults to the installed
    * client, and never substitutes the web player without being told to.
@@ -307,12 +313,30 @@ export interface Settings {
    * headless sign-in attempt.
    */
   gfnLinked: boolean
+  /**
+   * Ask GitHub whether there is a newer launcher, once per start.
+   *
+   * A real preference rather than a hidden constant: this is the one request
+   * the launcher makes that is about *itself* rather than about GeForce NOW,
+   * and someone running it on a metered or air-gapped connection is owed a way
+   * to turn it off. Off, the Settings row still checks on demand — the toggle
+   * governs the automatic check, not the feature.
+   */
+  updateCheck: boolean
+  /**
+   * The version whose notice the user pressed "Not now" on.
+   *
+   * Not a preference either. It is what stops the popup from being a thing that
+   * appears on every single start until you give in: dismissing records the
+   * version, and only a release newer than it opens the notice again. Null
+   * before the first dismissal.
+   */
+  dismissedUpdate: string | null
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   autostart: false,
   fullscreen: true,
-  hideOnLaunch: true,
   // Not `auto`: see `LaunchMode`. Handing the game to the installed client is
   // what the launcher is for, and falling back to a browser window is a choice
   // the user makes, not one a failed probe makes for them.
@@ -320,7 +344,9 @@ export const DEFAULT_SETTINGS: Settings = {
   accentColor: DEFAULT_ACCENT,
   uiScale: DEFAULT_UI_SCALE,
   locale: 'en_US',
-  gfnLinked: false
+  gfnLinked: false,
+  updateCheck: true,
+  dismissedUpdate: null
 }
 
 /**
@@ -484,6 +510,119 @@ export interface StatusSnapshot {
   error: string | null
 }
 
+/**
+ * How this copy of the launcher was installed, and therefore who is allowed to
+ * replace it.
+ *
+ * Not a cosmetic label: it selects the whole update path. A Flatpak is updated
+ * by `flatpak` on the host, an AppImage is one file this process can overwrite,
+ * and a `.deb` belongs to the package manager — which needs root, and root is
+ * not on the table here for the same reason it is not for waking the machine
+ * with a gamepad.
+ */
+export type UpdateChannel =
+  /** Packaged as a Flatpak. `flatpak update` on the host. */
+  | 'flatpak'
+  /** A single AppImage file the launcher can download over. */
+  | 'appimage'
+  /** Installed by the system's package manager — a `.deb` today. */
+  | 'system'
+  /** Running from source, or from something none of the above describes. */
+  | 'unknown'
+
+/**
+ * Whether there is a newer launcher, and what can be done about it here.
+ *
+ * `available` and `canApply` are separate facts and the UI needs both: every
+ * install form can be *told* about a release, and only two of them can install
+ * one. Conflating them would either hide the news from `.deb` users or offer
+ * them a button that cannot work.
+ */
+export interface UpdateStatus {
+  /** This build, from `package.json`. */
+  currentVersion: string
+  /** Newest published release, normalised without the tag's `v`. Null when unknown. */
+  latestVersion: string | null
+  available: boolean
+  channel: UpdateChannel
+  /** True when confirming the notice actually installs something. */
+  canApply: boolean
+  /**
+   * Why it cannot, in a sentence the user can act on. Null when it can, or when
+   * there is nothing to install anyway.
+   */
+  blockedReason: string | null
+  /** Release notes, already reduced to a few lines readable at three metres. */
+  notes: string[]
+  /** ISO 8601 of the release. */
+  publishedAt: string | null
+  /** Size of the artefact this build would download, when there is one to name. */
+  downloadBytes: number | null
+  /** ISO 8601 of the last *successful* check. Null when there has never been one. */
+  checkedAt: string | null
+  /** Set when the last check failed. Everything else is then last known good. */
+  error: string | null
+}
+
+/**
+ * Where a running update has got to. Pushed over `update:progress`.
+ *
+ * Two sources that count differently, which is why `percent` is its own field
+ * rather than something the UI derives. The AppImage path counts bytes, because
+ * it is doing the transfer. The Flatpak path counts percent, because `flatpak`
+ * is doing the transfer and a percentage is all it prints — it never says how
+ * many bytes, so the byte fields stay zero there and the notice shows a bar
+ * with no figures beside it rather than a made-up total.
+ */
+export interface UpdateProgress {
+  phase: 'downloading' | 'verifying' | 'installing'
+  /** 0–100 when the source can say, null while it cannot yet. */
+  percent: number | null
+  receivedBytes: number
+  /** 0 when the source counts in percent, or when the server sent no length. */
+  totalBytes: number
+}
+
+/**
+ * Outcome of installing an update.
+ *
+ * Mirrors `PowerResult` in carrying the argv: a `flatpak update` that polkit
+ * refused is diagnosable only if the command is on screen beside the refusal.
+ */
+export interface UpdateApplyResult {
+  ok: boolean
+  /**
+   * True when the new version is on disk and only a restart is left.
+   *
+   * Not the same as "the launcher can restart itself" — a Flatpak cannot, since
+   * the running sandbox has the old deploy bind-mounted into it, so the honest
+   * answer there is that the update takes effect the next time it opens.
+   */
+  restartRequired: boolean
+  /** Set when the launcher can put the new version on screen right now. */
+  canRestart: boolean
+  command: string | null
+  error: string | null
+}
+
+/**
+ * What a bug report needs to name, resolved on the side that knows it.
+ *
+ * All four values live in the main process — the log path comes from
+ * `userData`, the channel from `resolveUpdateChannel` — and the renderer's only
+ * use for them is to print them. Kept out of `Settings` deliberately: none of
+ * these is a preference, and putting them there would mean a `sanitise` branch
+ * for a field nobody can set.
+ */
+export interface Diagnostics {
+  /** The file to attach. Absolute, and the same path the README names. */
+  logPath: string
+  version: string
+  channel: UpdateChannel
+  /** Whether this is the Flatpak, which decides where the path above points. */
+  sandboxed: boolean
+}
+
 export interface AuthStatus {
   authenticated: boolean
 }
@@ -563,6 +702,46 @@ export interface LauncherApi {
     get(): Promise<Settings>
     update(patch: Partial<Settings>): Promise<Settings>
   }
+  update: {
+    /**
+     * Whether there is a newer launcher.
+     *
+     * Never throws: a failed request comes back as a status carrying `error`,
+     * the same posture as `status.get()`. Served from a short-lived memory
+     * cache unless `force` — the Settings row forces, the check after first
+     * paint does not.
+     */
+    check(force: boolean): Promise<UpdateStatus>
+    /**
+     * Installs the update this build is able to install.
+     *
+     * Refuses rather than throws when it cannot: a `.deb` is the package
+     * manager's business, and the result says so instead of pretending.
+     */
+    apply(): Promise<UpdateApplyResult>
+    /**
+     * Restarts into the version just installed.
+     *
+     * Only ever offered when `UpdateApplyResult.canRestart` said so. False when
+     * the launcher refused rather than restarting — a Flatpak whose host
+     * permission was revoked cannot hand the relaunch over, and quitting anyway
+     * would leave a television with no launcher and nothing able to start one.
+     *
+     * The boolean is not decoration: without it the notice sits on
+     * "Restarting…" for a restart that is never coming, which is the one
+     * failure on this path nobody in the room can diagnose.
+     */
+    restart(): Promise<boolean>
+    /**
+     * Byte counts during a download, for the one operation here long enough to
+     * need them.
+     *
+     * Returns its own unsubscribe. The listener receives the payload alone —
+     * the `IpcRendererEvent` carrying it, and the `sender` on that event, stay
+     * on the preload side of the bridge.
+     */
+    onProgress(listener: (progress: UpdateProgress) => void): () => void
+  }
   app: {
     quit(): Promise<void>
     /**
@@ -602,5 +781,12 @@ export interface LauncherApi {
      * launcher has to ask for this at all.
      */
     padActivity(): void
+    /**
+     * Where the log file is, so the interface can say which one to attach.
+     *
+     * Takes no argument, like `openDonation` and for the same reason. Never
+     * throws: every field is read out of this process's own state.
+     */
+    diagnostics(): Promise<Diagnostics>
   }
 }

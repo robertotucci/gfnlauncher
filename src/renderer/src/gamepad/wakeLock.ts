@@ -25,6 +25,10 @@ export function usePadWakeLock(): void {
     const now = performance.now()
     if (now - lastPingAt.current < PAD_ACTIVITY_PING_MS) return
     lastPingAt.current = now
-    window.launcher.app.padActivity()
+    // Optional because a preload that failed to load would otherwise throw on
+    // every press. `GamepadProvider` catches it and input survives, but the log
+    // would then carry one report per interaction of a fault the footer has
+    // already named once.
+    window.launcher?.app.padActivity()
   })
 }

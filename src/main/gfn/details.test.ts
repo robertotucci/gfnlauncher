@@ -10,10 +10,20 @@ import {
 } from './details'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/gfn-launcher-test' } }))
+// `saveDetails` goes through `writeFileAtomic`, which is a sibling write and a
+// rename rather than a `writeFile` — see `atomicFile.ts` for why. The mock has
+// to cover that shape or the test writes seven megabytes into /tmp.
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   writeFile: vi.fn(async () => undefined),
-  mkdir: vi.fn(async () => undefined)
+  mkdir: vi.fn(async () => undefined),
+  open: vi.fn(async () => ({
+    writeFile: async () => undefined,
+    sync: async () => undefined,
+    close: async () => undefined
+  })),
+  rename: vi.fn(async () => undefined),
+  rm: vi.fn(async () => undefined)
 }))
 
 const base = {

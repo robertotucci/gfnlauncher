@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { app } from 'electron'
+import { writeFileAtomic } from '../atomicFile'
 import {
   CATALOG_CACHE_VERSION,
   type CatalogSnapshot,
@@ -201,9 +202,10 @@ async function loadSnapshot(): Promise<CatalogSnapshot | null> {
 
 async function writeCache(next: CatalogSnapshot): Promise<void> {
   snapshot = next
-  const path = cachePath()
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(next), 'utf8')
+  // Atomic: four megabytes takes long enough to write that a `poweroff` from
+  // the launcher's own power menu can land in the middle of it, and half a
+  // catalog is a twelve-second re-walk on the next start.
+  await writeFileAtomic(cachePath(), JSON.stringify(next))
 }
 
 /** Test seam: drops the memoised snapshot. */
@@ -294,7 +296,9 @@ export async function fetchLiveCatalog(
     return { items: data.apps?.items ?? [], pageInfo: data.apps?.pageInfo }
   }, MAX_ITEMS)
 
-  const games = items.map(mapApp).filter((game): game is GfnGame => game !== null)
+  // Sorted here rather than trusted from `sortString: 'ALPHABETICAL'` above:
+  // the gateway ignores it. See `sortByName`.
+  const games = sortByName(items.map(mapApp).filter((game): game is GfnGame => game !== null))
   return { games, truncated }
 }
 
@@ -309,14 +313,31 @@ export async function fetchPublicCatalogGames(
   locale: string
 ): Promise<{ games: GfnGame[]; truncated: boolean; details: Record<string, GameDetails> }> {
   const { items, truncated } = await fetchPublicCatalog(locale, MAX_ITEMS)
-  const games = items.map(mapApp).filter((game): game is GfnGame => game !== null)
-  // This feed has no `orderBy` and arrives in no useful order, while the
-  // authenticated one is asked for ALPHABETICAL. Sorting here keeps the grid
-  // the same object whichever source filled it.
-  games.sort((a, b) => a.sortName.localeCompare(b.sortName))
+  const games = sortByName(items.map(mapApp).filter((game): game is GfnGame => game !== null))
   // Same walk, second model: this feed has no per-app query, so the details
   // panel's data has to be harvested here or not at all.
   return { games, truncated, details: mapDetailsIndex(items) }
+}
+
+/**
+ * Puts the grid in the order a person reads it in.
+ *
+ * **Applied to both feeds, and the authenticated one is the reason it exists.**
+ * `fetchLiveCatalog` asks for `sortString: 'ALPHABETICAL'` and the gateway does
+ * not honour it — a signed-in walk of 5.879 titles comes back in the order
+ * NVIDIA's panels happen to be assembled in, which begins "Wolcen: Lords of
+ * Mayhem, Half-Life 2, Rage, Tomb Raider: Anniversary". The public feed has no
+ * `orderBy` at all and never claimed to. So neither source can be trusted for
+ * this, and sorting on the way out is the only thing that makes the Catalog grid
+ * the same object whichever one filled it — verified against a real signed-in
+ * cache, which was not sorted.
+ *
+ * `sortName` rather than `title`: it is the unlocalised slug both feeds emit,
+ * with the leading articles and trademark symbols already resolved the way GFN
+ * itself resolves them.
+ */
+function sortByName(games: GfnGame[]): GfnGame[] {
+  return games.sort((a, b) => a.sortName.localeCompare(b.sortName))
 }
 
 /**
