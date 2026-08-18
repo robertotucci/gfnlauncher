@@ -40,24 +40,20 @@ You do not need a GeForce NOW account to browse or to launch: the deep link goes
 
 **You already have Flatpak.** GeForce NOW on Linux *is* a Flatpak, so the one prerequisite for the recommended install is the same thing this launcher requires anyway. Nothing new to adopt.
 
-### Flatpak — recommended, any distribution, automatic updates
+### Flatpak bundle — recommended, any distribution
 
-```bash
-flatpak install flathub io.github.robertotucci.GfnLauncher
-flatpak run io.github.robertotucci.GfnLauncher
-```
-
-> Flathub submission is in progress. Until it lands, use the bundle below — it installs the same build.
-
-### Flatpak bundle — from the Releases page
-
-Works on every distribution, offline, and needs no remote. It does **not** update itself: you download a new bundle each release.
+Works on every distribution, offline, and needs no remote.
 
 ```bash
 flatpak install --user ./GfnLauncher-<version>.flatpak
+flatpak run io.github.robertotucci.GfnLauncher
 ```
 
-### AppImage — if you would rather not use Flatpak at all
+A bundle installed by hand has nothing to update from, so this one does not update itself: each release is a new bundle to download. The launcher still notices a new version and tells you, and is honest about not being able to install it for you — it reads the deployed commit either side of an update rather than trusting `flatpak update`, which succeeds and changes nothing when there is no remote behind it.
+
+This launcher is **not on Flathub**, and there is no build to install from there.
+
+### AppImage — if you would rather not use Flatpak at all, and the one build that updates itself
 
 ```bash
 chmod +x GFN-Launcher-<version>.AppImage

@@ -55,7 +55,9 @@ The launcher's own updater reads `/releases/latest` and acts on what it finds th
 
 ## Flathub
 
-The `.flatpak` bundle in each release installs the same build, but does not update itself. Flathub is the channel that does — and it is what the launcher's own "Install the update" runs against: `flatpak update` needs a remote, so a copy installed from the bundle by hand has nothing to update from and the notice says so instead of pretending.
+**There is no Flathub build, and the submission was rejected.** [flathub/flathub#9809](https://github.com/flathub/flathub/pull/9809) was closed on 2026-08-18 under Flathub's [generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy), which bars a submission whose pull request, description or code is AI-generated or AI-assisted — this repository's commit history says it is. The rest of this section is accurate and is kept for the day that is resolved; none of it describes anything that exists today.
+
+The `.flatpak` bundle in each release installs the same build, but does not update itself, and with no Flathub remote nothing else can: `flatpak update` needs a remote, so a copy installed from the bundle by hand has nothing to update from. The launcher's own "Install the update" reads the deployed commit either side of the call and says so, instead of pretending. The AppImage path is unaffected — it replaces its own file.
 
 Submission is a pull request against [`flathub/flathub`](https://github.com/flathub/flathub) on the `new-pr` branch, carrying the manifest with its `type: dir` source replaced by a git source pinned to the release tag. After acceptance, updates are a pull request against the app's own Flathub repository, and the buildbot publishes.
 
