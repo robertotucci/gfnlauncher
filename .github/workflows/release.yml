@@ -156,9 +156,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Deliberately *not* `ref: inputs.tag`, unlike every other job here. What
+      # this job needs from the tree is the publishing machinery rather than
+      # the application, and the application arrives as an artefact already
+      # built from the tag. Checking out the tag would mean an older release
+      # could only ever be republished with the script as it stood then — and
+      # v0.1.0 predates the script entirely, so it could not be republished at
+      # all. The default is the ref that triggered the run: the tag on a tag
+      # push, the default branch on a manual one, and both carry the script.
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install flatpak
         run: |
@@ -209,7 +215,7 @@ jobs:
       # walk the repository into GitHub's size limits within a year.
       - name: Push
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="${{ inputs.tag || github.ref_name }}"
           cd pages
           git init -q -b gh-pages
           git config user.name "github-actions[bot]"
