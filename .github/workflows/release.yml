@@ -274,9 +274,18 @@ jobs:
             echo 'See the [README](https://github.com/robertotucci/gfnlauncher#install) for the AppImage and .deb, and for what sandbox permissions the Flatpak asks for and why.'
           } >> notes.md
 
+      # Named rather than `artifacts/*`, because not every artefact this run
+      # produces is something to publish: the OSTree repository travels between
+      # jobs the same way and is 130 MB of implementation detail. Listing the
+      # three real ones means a new artefact cannot end up on the release page
+      # by simply existing, and `fail_on_unmatched_files` still catches one
+      # going missing.
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           body_path: notes.md
-          files: artifacts/*
+          files: |
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/*.flatpak
           fail_on_unmatched_files: true
