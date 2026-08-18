@@ -95,8 +95,15 @@ export function buildDesktopEntry({
     'Categories=Game;Network;',
     'X-GNOME-Autostart-enabled=true',
     // **This is what makes an autostarted launcher come up focused**, and it is
-    // not cosmetic: the Gamepad API only reports to a focused window, so without
-    // it the launcher lands at the front of a fresh session and answers nothing.
+    // not cosmetic: without it the launcher lands at the front of a fresh
+    // session holding no focus, which costs it the keyboard, the display wake
+    // lock and any claim on the screen.
+    //
+    // It no longer costs it the pad, and that is deliberate rather than lucky.
+    // `shouldAcceptInput` accepts a blurred launcher that nothing is standing in
+    // front of, which is exactly this case — see `@shared/input` for why the
+    // input gate is not keyed on focus alone. An entry written before this line
+    // existed would otherwise have been a dead television.
     //
     // With it, the session issues a startup id — an `XDG_ACTIVATION_TOKEN` under
     // Wayland — which Chromium consumes for the first window, and the compositor

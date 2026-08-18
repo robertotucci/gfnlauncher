@@ -115,6 +115,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.1" date="2026-08-19">
+      <description>
+        <p>Fixes for input during a game, library sync, and keeping up with the GeForce NOW client.</p>
+        <ul>
+          <li>The pad no longer drives the launcher while a game is streaming, and a button still held when the game ends is not read as a fresh press</li>
+          <li>The launcher follows the GeForce NOW client while it runs — a client that updates, or a server location changed in the GeForce NOW app, is picked up without a restart</li>
+          <li>Refreshing every store library works instead of answering "sync refused (401)", and names the stores that still refuse</li>
+          <li>A second press of the menu button during a hand-off no longer ends the game that is starting</li>
+          <li>Stores that do not offer library sync are left out of a refresh rather than reported as an error</li>
+          <li>The screen stops being held awake as soon as another window takes the focus</li>
+          <li>The cursor no longer moves inside a panel that is closing</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.1</url>
+    </release>
     <release version="0.1.0" date="2026-08-17">
       <description>
         <p>First public release.</p>

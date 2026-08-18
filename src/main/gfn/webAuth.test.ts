@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isApiRequest, readVpcId, readVpcIdFromUrl } from './webAuth'
+import { isApiRequest, readIdToken, readVpcId, readVpcIdFromUrl } from './webAuth'
 
 function body(text: string): Electron.UploadData[] {
   return [{ bytes: Buffer.from(text, 'utf8') } as Electron.UploadData]
@@ -70,6 +70,48 @@ describe('isApiRequest', () => {
 
   it('refuses a malformed url instead of throwing', () => {
     expect(isApiRequest('not a url')).toBe(false)
+  })
+})
+
+describe('readIdToken', () => {
+  /** The web client's own encoding: base64 of a percent-encoded JSON blob. */
+  function record(session: Record<string, unknown>, authProvider = 'starfleet'): unknown {
+    return {
+      authProvider,
+      data: Buffer.from(encodeURIComponent(JSON.stringify(session)), 'utf8').toString('base64')
+    }
+  }
+
+  // Shaped like a JWT and deliberately not one. Never put a real token here.
+  const idToken = 'header.payload.signature'
+
+  it('reads the id token out of a stored Starfleet session', () => {
+    expect(readIdToken(record({ idToken, accessToken: 'other' }))).toBe(idToken)
+  })
+
+  it('survives the non-ASCII a display name can carry', () => {
+    // The blob is percent-encoded before base64 precisely because of this;
+    // decoding in the wrong order mangles it.
+    expect(readIdToken(record({ idToken, user: { preferred_username: 'Renée ✦' } }))).toBe(idToken)
+  })
+
+  it('returns null for a record written by something other than Starfleet', () => {
+    expect(readIdToken(record({ idToken }, 'someone-else'))).toBeNull()
+  })
+
+  it('returns null when the session carries no id token', () => {
+    expect(readIdToken(record({ accessToken: 'other', idToken: null }))).toBeNull()
+    expect(readIdToken(record({ idToken: '' }))).toBeNull()
+    expect(readIdToken(record({ idToken: 42 }))).toBeNull()
+  })
+
+  it('survives a malformed record instead of throwing', () => {
+    // This runs inside a capture that has to succeed without it.
+    expect(readIdToken({ authProvider: 'starfleet', data: 'not base64' })).toBeNull()
+    expect(readIdToken({ authProvider: 'starfleet', data: 42 })).toBeNull()
+    expect(readIdToken({ authProvider: 'starfleet' })).toBeNull()
+    expect(readIdToken(null)).toBeNull()
+    expect(readIdToken('starfleetSession')).toBeNull()
   })
 })
 

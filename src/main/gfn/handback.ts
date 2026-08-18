@@ -7,9 +7,14 @@ import { createStreamLogTail, type StreamLogTail } from './streamLog'
  *
  * The GeForce NOW client does not exit when a stream ends. It returns to its own
  * mall, fullscreen, holding the focus — which on a machine with no mouse means
- * holding the launcher hostage, because the Gamepad API only reports to a
- * focused window. So the launcher closes the client for the user and takes the
- * screen back.
+ * holding the launcher hostage: there is nothing a pad can do to raise a window
+ * the compositor is not showing. So the launcher closes the client for the user
+ * and takes the screen back.
+ *
+ * The watch has a second consumer now. `onEnded` releases the input gate in
+ * `main/screen.ts` — the renderer refuses to act on the pad while the client has
+ * the screen — so the *end* of this watch has to be observable however it comes,
+ * not only through `onClientGone`.
  *
  * ── Two jobs, deliberately not one ──────────────────────────────────────────
  *
@@ -231,6 +236,20 @@ export interface HandbackOptions {
   autoClose: boolean
   /** Raise and focus the launcher. Called at most once, and never on disarm. */
   onClientGone: () => void
+  /**
+   * The watch is over, whatever ended it. Called at most once, including on
+   * disarm — which is what makes it different from `onClientGone`.
+   *
+   * It exists because something outside this module now depends on the session
+   * being live: `setHandedOff` tells the renderer to stop answering the pad
+   * while the client has the screen, and a flag released only by `onClientGone`
+   * would stay set for every ending that is not "the client went away" — a
+   * launch that never spawned, a disarm from the next launch, a quit. The
+   * failure mode of getting that wrong is a launcher that ignores the pad, so
+   * the release hangs off the end of the watch rather than off one of its
+   * outcomes.
+   */
+  onEnded?: () => void
 }
 
 /**
@@ -265,6 +284,9 @@ export function armHandback(options: HandbackOptions): void {
     tail?.stop()
     tail = null
     options.child?.off('exit', onChildExit)
+    // Last, and inside the `stopped` guard, so it fires exactly once however
+    // the watch ended — `handBack`, a disarm from the next launch, or a quit.
+    options.onEnded?.()
   }
 
   const handle = { stop }

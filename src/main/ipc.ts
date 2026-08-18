@@ -36,8 +36,16 @@ import type { GfnGraphQLConfig } from './gfn/graphql'
 import { listProviders, selectVariant, setOwned } from './gfn/library'
 import { syncProvider, type AlsConfig } from './gfn/als'
 import { readAlsServerUrl } from './gfn/appConfig'
-import { ensureSession, isAuthenticated, signIn, signOut } from './gfn/session'
+import {
+  ensureSession,
+  getAlsToken,
+  invalidateSession,
+  isAuthenticated,
+  signIn,
+  signOut
+} from './gfn/session'
 import { listRecent, recordPlay } from './recent'
+import { setHandedOff } from './screen'
 import { getStatus, refreshStatus } from './status'
 import { getSettings, updateSettings } from './settings'
 import { applyUpdate, getUpdateStatus, restartIntoUpdate, updateChannel } from './update'
@@ -80,6 +88,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     // from spawning.
     disarmHandback()
 
+    // Before the kill and the spawn, not after, so the `KILL_SETTLE_MS` gap and
+    // the client's own start-up are covered too — the launcher is about to be
+    // behind something and it should stop acting on the pad from here. Released
+    // below if nothing starts, and by the session watch's `onEnded` otherwise.
+    setHandedOff(true, 'launching a game')
+
     const settings = await getSettings()
     const installed = (await detectGfn()).installed
     const path = resolveLaunchPath(settings.launchMode, installed)
@@ -96,7 +110,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
     const result =
       path === 'web'
-        ? await launchViaWeb(request, () => void restoreLauncher(getWindow()))
+        ? await launchViaWeb(request, () => {
+            // Our own window, but a fullscreen one that takes the focus, so the
+            // launcher behind it is in exactly the position it is in behind the
+            // native client.
+            setHandedOff(false, 'web stream closed')
+            void restoreLauncher(getWindow())
+          })
         : await launchGame(request, {
             // Armed on the spawn rather than after the await, so the watch
             // exists before the client can possibly have finished a session.
@@ -104,7 +124,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
               armHandback({
                 child,
                 autoClose: true,
-                onClientGone: () => void restoreLauncher(getWindow())
+                onClientGone: () => void restoreLauncher(getWindow()),
+                onEnded: () => setHandedOff(false, 'session watch ended')
               })
           })
 
@@ -113,6 +134,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // play history is written. `gameId`, not `cmsId`: the latter is the
       // store edition GFN was handed, which does not match a tile.
       await recordPlay(request.gameId)
+    } else {
+      // Nothing started, so no watch was armed and nothing else will release it.
+      setHandedOff(false, 'launch failed')
     }
 
     // **The launcher deliberately does not step aside here.** GFN opens
@@ -120,6 +144,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     // pad cannot raise — which used to make quitting a game a dead end. It stays
     // where it is and `armHandback` brings it back to the front when the client
     // goes away.
+    //
+    // Which is why `setHandedOff` above is not optional. A launcher left mapped,
+    // fullscreen and polling behind a stream is one Chromium keeps handing pad
+    // data to, and it spent every game acting on it: the cursor moved, and a
+    // pause menu could reach this handler and kill the client it is streaming
+    // from. Staying put is right; staying put *and* staying live was the bug.
 
     return result
   })
@@ -129,19 +159,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     const result = await openGfnClient({
       // `autoClose: false`: the user asked for the real client on purpose, so
       // nothing here ends it. The watch is still worth arming — this path
-      // minimises unconditionally, and the pad cannot raise a blurred window, so
-      // the way back matters more here rather than less.
+      // minimises unconditionally, and there is nothing a pad can do to raise an
+      // iconified window, so the way back matters more here rather than less.
       onSpawned: (child) =>
         armHandback({
           child,
           autoClose: false,
-          onClientGone: () => void restoreLauncher(getWindow())
+          onClientGone: () => void restoreLauncher(getWindow()),
+          onEnded: () => setHandedOff(false, 'session watch ended')
         })
     })
     // Unlike the launch path above: the point of this button is to put the user
     // in front of the GFN window for the things the launcher does not mirror,
     // and a fullscreen launcher on top of it would make the button look broken.
-    if (result.ok) stepAside(getWindow())
+    if (result.ok) {
+      setHandedOff(true, 'the GeForce NOW client was opened')
+      stepAside(getWindow())
+    }
     return result
   })
 
@@ -150,6 +184,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   }))
 
   ipcMain.handle(IPC.authSignIn, async (): Promise<AuthResult> => {
+    // NVIDIA's login page is the one part of the product that is not
+    // gamepad-navigable, so it is also the one place where the user is typing a
+    // password into a window of ours while the launcher sits behind it. Driving
+    // the grid blind underneath that is the same defect as driving it behind a
+    // game, and it wants the same answer.
+    setHandedOff(true, 'the sign-in window is open')
     try {
       const { locale } = await getSettings()
       await signIn(locale)
@@ -159,6 +199,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return { ok: true, error: null }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'Sign-in failed' }
+    } finally {
+      setHandedOff(false, 'the sign-in window is closed')
     }
   })
 
@@ -208,23 +250,82 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   /**
    * Builds the ALS client's configuration from the live session.
    *
-   * ALS is a different backend from the GraphQL API but authenticates off the
-   * same partition, so it gets the same captured credentials. Its base URL is
-   * read from the installed client rather than hardcoded — a proxy override can
-   * replace it, and the launcher must follow whatever the client is using.
+   * ALS is a different backend from the GraphQL API and, unlike it, does not
+   * accept the partition's cookies: it wants the Starfleet id token the capture
+   * reads off the hosted web client. Its base URL is read from the installed
+   * client rather than hardcoded — a proxy override can replace it, and the
+   * launcher must follow whatever the client is using.
    */
   async function alsConfig(session: GfnGraphQLConfig): Promise<AlsConfig> {
     return {
       serverUrl: await readAlsServerUrl(),
       // Deliberately not `session.token`. That credential is scoped to the
-      // GraphQL gateway, and handing it to a different service is how a
-      // request that the partition's cookies would have authenticated gets
-      // rejected instead. `als.ts` strips the captured one for the same reason.
-      token: null,
+      // GraphQL gateway and uses a different scheme; handing it to another
+      // service is how a request gets rejected rather than authenticated.
+      // `als.ts` strips the captured one for the same reason.
+      token: getAlsToken(),
       clientId: session.clientId,
       clientVersion: session.clientVersion,
       headers: session.headers
     }
+  }
+
+  /**
+   * Syncs the given stores, re-capturing the session once if ALS refuses.
+   *
+   * The ALS credential outlives neither the login nor the launcher's own idea
+   * of it: it has its own expiry, and it can be revoked server-side with no
+   * sign here until a 401 comes back. So a missing token is topped up before
+   * asking, and a wholesale refusal buys exactly one silent re-capture and one
+   * retry. Exactly one — a headless capture boots the entire GFN web app, and a
+   * loop of them behind a button press is worse than the error it is avoiding.
+   *
+   * A partial refusal is left alone: if one store accepted, the credential is
+   * fine and the others failed for reasons of their own.
+   */
+  async function syncWithRetry(
+    session: GfnGraphQLConfig,
+    locale: string,
+    gfnLinked: boolean,
+    providerIds: string[]
+  ): Promise<SyncResult[]> {
+    let live = session
+    if (!getAlsToken()) {
+      invalidateSession()
+      live = (await ensureSession(locale, gfnLinked)) ?? session
+    }
+
+    const run = async (config: AlsConfig): Promise<SyncResult[]> =>
+      Promise.all(providerIds.map((providerId) => syncProvider(config, providerId)))
+
+    const config = await alsConfig(live)
+    let results = await run(config)
+    // Only worth re-capturing if the attempt actually carried a credential.
+    // Having just topped one up and come back empty, doing it again buys the
+    // same nothing at the price of a second headless boot.
+    const refused =
+      config.token !== null &&
+      results.every((result) => !result.accepted) &&
+      results.some((result) => result.status === 401)
+
+    if (refused) {
+      console.error(
+        `Library sync refused for ${providerIds.join(', ')}; re-capturing the session`
+      )
+      invalidateSession()
+      const fresh = await ensureSession(locale, gfnLinked)
+      if (fresh) results = await run(await alsConfig(fresh))
+    }
+
+    for (const result of results) {
+      // Never the response body: ALS is an authenticated service and its
+      // errors have quoted the request back before now.
+      if (!result.accepted) {
+        console.error(`Library sync failed for ${result.providerId}: status=${result.status}`)
+      }
+    }
+
+    return results
   }
 
   ipcMain.handle(
@@ -232,8 +333,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     async (_event, providerId: string): Promise<SyncResult> => {
       const { locale, gfnLinked } = await getSettings()
       const session = await ensureSession(locale, gfnLinked)
-      if (!session) return { accepted: false, providerId, error: NOT_CONNECTED }
-      return syncProvider(await alsConfig(session), providerId)
+      if (!session) {
+        return { accepted: false, providerId, status: null, error: NOT_CONNECTED }
+      }
+      const [result] = await syncWithRetry(session, locale, gfnLinked, [providerId])
+      // One provider in, one result out; the fallback exists for the type only.
+      return result ?? { accepted: false, providerId, status: null, error: 'Sync request failed' }
     }
   )
 
@@ -260,15 +365,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     }
 
-    // An expired or unlinked store has nothing to sync; asking anyway would
-    // report a failure the user cannot act on from here.
+    // An expired or unlinked store has nothing to sync, and a store that does
+    // not do library sync at all answers 400; asking either one reports a
+    // failure the user cannot act on from here.
     const linked = providers.filter((provider) => provider.state === 'linked')
     if (linked.length === 0) return { results: [], error: 'No linked stores to sync' }
 
-    const config = await alsConfig(session)
+    const syncable = linked.filter((provider) => provider.canSync)
+    if (syncable.length === 0) {
+      return { results: [], error: 'No connected store supports library sync' }
+    }
+
     return {
-      results: await Promise.all(
-        linked.map((provider) => syncProvider(config, provider.id))
+      results: await syncWithRetry(
+        session,
+        locale,
+        gfnLinked,
+        syncable.map((provider) => provider.id)
       ),
       error: null
     }

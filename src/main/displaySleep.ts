@@ -1,4 +1,4 @@
-import { powerSaveBlocker, type BrowserWindow } from 'electron'
+import { app, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { shouldStayAwake } from '@shared/wakeLock'
 
 /**
@@ -70,6 +70,20 @@ export function createDisplayWakeLock(getWindow: () => BrowserWindow | null): Di
   // `unref` so a launcher on its way out is not held open by a timer whose only
   // job is to let go of something.
   setInterval(apply, CHECK_INTERVAL_MS).unref()
+
+  // Losing focus is the one release that must not wait for that interval. The
+  // claim is `!focused` the instant GeForce NOW takes the screen, and holding
+  // `prevent-display-sleep` — which on Linux also defers the session lock — for
+  // up to another half a minute over somebody else's fullscreen window is
+  // exactly the behaviour `docs/wake-on-gamepad.md` refuses to have.
+  //
+  // It matters more now than it did: the renderer stops reporting pad activity
+  // while it is not answering the pad, so nothing else would come along to
+  // re-evaluate this. At the `app` level rather than on a window handle, so
+  // there is no initialisation order between here and `createWindow` to get
+  // wrong; `apply` re-reads the window either way.
+  app.on('browser-window-blur', apply)
+  app.on('browser-window-focus', apply)
 
   return {
     padActivity(): void {

@@ -122,6 +122,32 @@ mutation SelectOwnedVariant($cmsId: String!, $locale: String!) {
 }`
 
 /**
+ * Which stores GFN will actually pull a library from.
+ *
+ * A narrowed `appStoreDefinitions` selection out of the client's
+ * `GetStaticAppData`, which asks for the same `features` union alongside a
+ * great deal the launcher has no use for. `AccountLinkingSso` and
+ * `AccountGamesSyncing` are separate members of it, and a store can support the
+ * first without the second — Epic is exactly that, and asking ALS to sync it
+ * answers 400. `AccountGamesSyncing.supported` is what the client's
+ * `isAccountSyncingSupported` reads before it asks.
+ *
+ * Sent under `requestType=staticAppData`, as the client sends it.
+ */
+export const APP_STORE_FEATURES = `
+query GetAppStoreDefinitions($locale: String!) {
+  appStoreDefinitions(language: $locale) {
+    store
+    features {
+      __typename
+      ... on AccountGamesSyncing {
+        supported
+      }
+    }
+  }
+}`
+
+/**
  * "My library" is a filter on the same `apps` query, not a separate endpoint:
  * every variant whose GFN library status is anything other than NOT_OWNED.
  */

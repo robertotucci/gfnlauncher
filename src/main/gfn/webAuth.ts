@@ -87,6 +87,22 @@ export interface CapturedSession {
    * server honours the header over the cookie and then rejects it.
    */
   token: string | null
+  /**
+   * The Starfleet id token — **ALS's** credential, not GraphQL's.
+   *
+   * The two are not interchangeable, which is the whole reason this field is
+   * separate from `token`. The shipped client sends `Bearer <id token>` to ALS
+   * (`AlsService.providerSync` -> `createHeader` -> `IdmService.getAuthToken`
+   * -> `StarfleetService.getAuthToken` -> `session.data.idToken`) and
+   * `GFNJWT <token>` to LCARS, the KV store and GXT. Sending either one to the
+   * other service is a 401.
+   *
+   * It is not on any request we can watch — the web app only calls ALS when the
+   * user links, unlinks or syncs a store — so it is read out of the page's own
+   * IndexedDB instead. Null when that read fails, which costs library sync and
+   * nothing else.
+   */
+  idToken: string | null
   clientId: string
   clientVersion: string
   vpcId: string
@@ -219,6 +235,160 @@ export function readVpcIdFromUrl(rawUrl: string): string | null {
   } catch {
     // Not a URL, or variables that are not JSON.
   }
+  return null
+}
+
+/**
+ * Where the web client keeps its Starfleet session.
+ *
+ * The bundle declares `DBName="starfleet"`, `DBKey="starfleetSession"` and two
+ * storage backends — `sharedStorage` and IndexedDB — writing the same encoded
+ * record either way: `{ authProvider: "starfleet", data }`, where `data` is
+ * `btoa(encodeURIComponent(JSON.stringify(session)))`.
+ *
+ * **The scan goes by key, not by name.** Both the database name and the object
+ * store name are assembled at runtime from the app's own config, and a probe
+ * looking for a store called `starfleet` found three databases and no such
+ * store on a real profile — the record was there, under another name. The key
+ * is the one part the bundle states outright, so that is what is searched for.
+ */
+const STARFLEET_PROVIDER = 'starfleet'
+const STARFLEET_KEY = 'starfleetSession'
+
+/**
+ * How long to keep asking the page for its Starfleet session.
+ *
+ * Capture finishes as soon as an authenticated GraphQL call is seen, and on a
+ * warm service worker that can be a second and a half after `loadURL` — early
+ * enough that the document may still be the initial empty one, whose opaque
+ * origin has no IndexedDB. So the probe is retried rather than trusted once,
+ * and the budget caps how long a page that never settles can hold the capture.
+ */
+const STARFLEET_READ_MS = 6_000
+const STARFLEET_RETRY_MS = 400
+
+const READ_STARFLEET_SESSION = `(async () => {
+  const out = { record: null, databases: 0, stores: 0, error: null }
+  const open = (name) =>
+    new Promise((resolve) => {
+      let request
+      try {
+        // No version argument: this must never trigger an upgrade transaction
+        // on a database the app itself owns.
+        request = indexedDB.open(name)
+      } catch {
+        resolve(null)
+        return
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => resolve(null)
+      request.onblocked = () => resolve(null)
+    })
+  const read = (db, store) =>
+    new Promise((resolve) => {
+      try {
+        const request = db.transaction(store).objectStore(store).get(${JSON.stringify(STARFLEET_KEY)})
+        request.onsuccess = () => resolve(request.result ?? null)
+        request.onerror = () => resolve(null)
+      } catch {
+        resolve(null)
+      }
+    })
+  try {
+    const names = (await indexedDB.databases()).map((entry) => entry.name).filter(Boolean)
+    out.databases = names.length
+    for (const name of names) {
+      const db = await open(name)
+      if (!db) continue
+      // objectStoreNames is a DOMStringList: array-like, and deliberately not
+      // spread — it has no Symbol.iterator, and the TypeError that produced was
+      // indistinguishable from "no session here".
+      const stores = Array.from(db.objectStoreNames)
+      out.stores += stores.length
+      for (const store of stores) {
+        const record = await read(db, store)
+        if (record) {
+          out.record = record
+          break
+        }
+      }
+      db.close()
+      if (out.record) break
+    }
+  } catch (error) {
+    out.error = String((error && error.message) || error)
+  }
+  return out
+})()`
+
+interface StarfleetProbe {
+  record?: unknown
+  databases?: number
+  stores?: number
+  error?: string | null
+}
+
+/**
+ * Pulls the id token out of a stored Starfleet session, and nothing else.
+ *
+ * The record also holds an access token, a client token and the signed-in
+ * user's identity. None of that has any business leaving this function: the
+ * launcher needs exactly one field, so exactly one field comes back.
+ *
+ * Every malformed shape yields null rather than throwing — this runs inside a
+ * capture that must still succeed without it.
+ */
+export function readIdToken(record: unknown): string | null {
+  if (typeof record !== 'object' || record === null) return null
+  const { authProvider, data } = record as { authProvider?: unknown; data?: unknown }
+  if (authProvider !== STARFLEET_PROVIDER || typeof data !== 'string') return null
+
+  try {
+    const session = JSON.parse(
+      decodeURIComponent(Buffer.from(data, 'base64').toString('utf8'))
+    ) as { idToken?: unknown }
+    return typeof session.idToken === 'string' && session.idToken.length > 0
+      ? session.idToken
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads the raw Starfleet record out of the capture window's own origin.
+ *
+ * Says why it came back empty rather than just coming back empty: the three
+ * ways this fails — wrong origin, wrong store, unreadable record — look
+ * identical from the outside and only one of them is ours to fix.
+ */
+async function readStarfleetRecord(window: BrowserWindow): Promise<unknown> {
+  const deadline = Date.now() + STARFLEET_READ_MS
+  let last: StarfleetProbe = {}
+
+  while (Date.now() < deadline) {
+    if (window.isDestroyed()) break
+
+    const probe = (await window.webContents
+      .executeJavaScript(READ_STARFLEET_SESSION)
+      .catch((error: unknown) => ({
+        error: error instanceof Error ? error.message : 'probe failed'
+      }))) as StarfleetProbe | null
+
+    last = probe ?? {}
+    if (last.record) return last.record
+    // No databases at all means the document is still the empty one the window
+    // starts on. Anything else is a real answer, and retrying will not change it.
+    if ((last.databases ?? 0) > 0) break
+
+    await new Promise((resolve) => setTimeout(resolve, STARFLEET_RETRY_MS))
+  }
+
+  console.warn(
+    'Starfleet session not read; library sync will be refused: ' +
+      `databases=${last.databases ?? 0} stores=${last.stores ?? 0}` +
+      (last.error ? ` error=${last.error}` : '')
+  )
   return null
 }
 
@@ -360,26 +530,45 @@ async function runCapture(options: CaptureOptions): Promise<CapturedSession> {
       }
     }
 
+    // `complete` can be reached twice — once when the vpcId lands and once from
+    // the grace timer — and it is now asynchronous, so the second caller would
+    // otherwise start a second read against a window the first is tearing down.
+    let completing = false
+
     const complete = (): void => {
-      const endpoint = found.endpoint ?? DEFAULT_GRAPHQL_ENDPOINT
-      console.log(
-        `GFN session captured: endpoint=${endpoint} ` +
-          `authScheme=${authScheme}\n` +
-          `  token from: ${tokenSource}\n` +
-          `  vpcId=${found.vpcId ?? 'MISSING'} graphqlPosts=${stats.graphqlPosts} ` +
-          `withBody=${stats.withUploadData} parsed=${stats.bodiesParsed}\n` +
-          `  client request shapes: ${[...apiShapes].join(' | ') || 'none'}\n` +
-          `  headers kept: ${Object.keys(capturedHeaders).join(', ') || 'none'}\n` +
-          `  authorized: ${[...authorizedUrls].join(' | ') || 'none'}\n` +
-          `  POSTs: ${[...postUrls].join(' | ') || 'none'}`
-      )
-      finish(null, {
-        token: found.token,
-        vpcId: found.vpcId ?? '',
-        endpoint,
-        clientId: found.clientId,
-        clientVersion: found.clientVersion,
-        headers: capturedHeaders
+      if (settled || completing) return
+      completing = true
+
+      // The overall timeout is what would otherwise fire *during* the read and
+      // reject a session that was in fact captured. Nothing after this point
+      // can hang: the read races its own deadline.
+      clearTimeout(timer)
+
+      void readStarfleetRecord(window).then((record) => {
+        const idToken = readIdToken(record)
+        const endpoint = found.endpoint ?? DEFAULT_GRAPHQL_ENDPOINT
+        console.log(
+          `GFN session captured: endpoint=${endpoint} ` +
+            `authScheme=${authScheme}\n` +
+            `  token from: ${tokenSource}\n` +
+            // Presence only. This one is a live credential for ALS.
+            `  starfleet idToken: ${idToken ? 'yes' : 'no'}\n` +
+            `  vpcId=${found.vpcId ?? 'MISSING'} graphqlPosts=${stats.graphqlPosts} ` +
+            `withBody=${stats.withUploadData} parsed=${stats.bodiesParsed}\n` +
+            `  client request shapes: ${[...apiShapes].join(' | ') || 'none'}\n` +
+            `  headers kept: ${Object.keys(capturedHeaders).join(', ') || 'none'}\n` +
+            `  authorized: ${[...authorizedUrls].join(' | ') || 'none'}\n` +
+            `  POSTs: ${[...postUrls].join(' | ') || 'none'}`
+        )
+        finish(null, {
+          token: found.token,
+          idToken,
+          vpcId: found.vpcId ?? '',
+          endpoint,
+          clientId: found.clientId,
+          clientVersion: found.clientVersion,
+          headers: capturedHeaders
+        })
       })
     }
 

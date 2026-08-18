@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StatusRegion } from '@shared/types'
-import { parseZoneAssignment, resolveZone } from './zone'
+import { parseZoneAssignment, resolveZone, sameZone } from './zone'
 
 const FINGERPRINT = 'c847d04d0e8c3424284f8e9b0b680d3f42b050c0'
 
@@ -208,5 +208,65 @@ describe('resolveZone', () => {
 
   it('resolves nothing when the fleet could not be fetched at all', () => {
     expect(resolveZone(parseZoneAssignment(storage()), []).region).toBeNull()
+  })
+})
+
+describe('sameZone', () => {
+  const resolved = (raw: unknown, regions = REGIONS): ReturnType<typeof resolveZone> =>
+    resolveZone(parseZoneAssignment(raw), regions)
+
+  it('reads a rewrite that did not touch the routing as no change at all', () => {
+    // The guard the watcher exists on. The client rewrites this file to rotate
+    // a token, bump a telemetry counter or record a consent — several times an
+    // hour, none of it about the datacenter. Without this, every one of those
+    // is a push to the renderer.
+    const rotated = storage({
+      starfleetSession: { data: 'ZXlKaFkyTmxjM05VYjJ0bGJpSTZJQ0p1WlhjaWZR' },
+      gfnTelemetry: { clientVersion: '2.0.88.129' }
+    })
+    expect(sameZone(resolved(storage()), resolved(rotated))).toBe(true)
+  })
+
+  it('always pushes the first reading', () => {
+    expect(sameZone(null, resolved(storage()))).toBe(false)
+  })
+
+  it('reads a re-pin as a change', () => {
+    const raw = storage() as { networkConfig: { routingOverride: Record<string, unknown> } }
+    raw.networkConfig.routingOverride.address = 'eu-france-1.cloudmatchbeta.nvidiagrid.net'
+    raw.networkConfig.routingOverride.name = 'France 1'
+    expect(sameZone(resolved(storage()), resolved(raw))).toBe(false)
+  })
+
+  it('reads a new zone code as a change', () => {
+    const raw = storage() as { remoteOverrides: { metaData: Record<string, unknown> } }
+    raw.remoteOverrides.metaData.zoneName = 'NP-FRK-06'
+    expect(sameZone(resolved(storage()), resolved(raw))).toBe(false)
+  })
+
+  it('reads a re-measured latency as a change', () => {
+    const raw = storage() as {
+      networkConfig: { networks: Record<string, { zonesLatencies: Record<string, string> }> }
+    }
+    raw.networkConfig.networks[FINGERPRINT] = {
+      zonesLatencies: { 'latency@eu-germany.cloudmatchbeta.nvidiagrid.net': '48' }
+    }
+    expect(sameZone(resolved(storage()), resolved(raw))).toBe(false)
+  })
+
+  it('reads the file becoming unreadable as a change', () => {
+    const good = resolved(storage())
+    const unreadable = {
+      ...good,
+      assignment: { ...good.assignment, error: 'The client config could not be read.' }
+    }
+    expect(sameZone(good, unreadable)).toBe(false)
+  })
+
+  it('reads the fleet arriving as a change, though the assignment never moved', () => {
+    // Why the signature takes a `ZoneStatus` and not a `ZoneAssignment`: the
+    // same six fields name no datacenter before the status feed lands and a
+    // named one after, and that is a different nameplate.
+    expect(sameZone(resolved(storage(), []), resolved(storage()))).toBe(false)
   })
 })

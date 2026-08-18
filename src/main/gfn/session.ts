@@ -78,6 +78,34 @@ export function isAuthenticated(): boolean {
   return active !== null
 }
 
+/**
+ * The credential ALS wants, which is not the one GraphQL uses.
+ *
+ * GraphQL rides on the partition's cookies; ALS refuses those and insists on
+ * `Bearer <Starfleet id token>`. Unlike the cookie session this one carries a
+ * readable `exp`, so a stale token can be recognised here instead of becoming a
+ * 401 the user has to interpret. Null means "re-capture before asking ALS".
+ */
+export function getAlsToken(now = Date.now()): string | null {
+  const token = active?.captured.idToken
+  if (!token) return null
+  const expiry = readExpiry(token)
+  if (expiry !== null && now >= expiry - EXPIRY_SKEW_MS) return null
+  return token
+}
+
+/**
+ * Forgets the current session so the next `ensureSession` re-captures.
+ *
+ * The clock is not the only way a session dies: cookies can be revoked
+ * server-side, and nothing about that is visible until a request comes back
+ * 401. Without this seam the launcher kept using a session the server had
+ * already rejected until `ASSUMED_LIFETIME_MS` ran out.
+ */
+export function invalidateSession(): void {
+  active = null
+}
+
 /** Current session without touching the network. Null when absent or stale. */
 export function getSession(): GfnGraphQLConfig | null {
   if (!active || isExpired()) return null

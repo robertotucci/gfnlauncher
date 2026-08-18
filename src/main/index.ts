@@ -2,13 +2,15 @@ import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icons/512x512.png?asset'
+import { armClientWatch, disarmClientWatch } from './clientWatch'
 import { disarmHandback } from './gfn/handback'
 import { FLATPAK_ID, IS_SANDBOXED } from './host'
 import { registerIpcHandlers } from './ipc'
 import { initLogging, writeLogLine } from './log'
 import { getSettings } from './settings'
+import { attachScreenReporting } from './screen'
 import { applyUiScale } from './uiScale'
-import { holdFullscreen, restoreLauncher } from './window'
+import { holdFullscreen, logFocusChanges, restoreLauncher } from './window'
 
 /**
  * Opened before anything else can fail.
@@ -70,6 +72,13 @@ function start(): void {
     })
 
     registerIpcHandlers(() => mainWindow)
+
+    // Before the window, not after: the GeForce NOW client can update while the
+    // first load is still going, and a change missed then is one nothing else
+    // would notice. The thunk is why that works — it pushes to whichever window
+    // exists by the time it has something to say.
+    armClientWatch(() => mainWindow)
+
     await createWindow()
 
     app.on('activate', () => {
@@ -77,12 +86,15 @@ function start(): void {
     })
   }, failedToStart)
 
-  // A live session watch holds a stat watcher and a probe timer. Both are
-  // already unref'd, so this is belt to that braces — but it is also what stops
-  // a probe resolving into a window that is being torn down.
+  // Two watches hold stat watchers and timers between them — the session one,
+  // for the length of a game, and the client one, for the length of the run.
+  // Everything in both is already `persistent: false` or unref'd, so this is
+  // belt to that braces — but it is also what stops a probe resolving into a
+  // window that is being torn down.
   app.on('will-quit', () => {
     console.info('Launcher quitting.')
     disarmHandback()
+    disarmClientWatch()
   })
 
   app.on('window-all-closed', () => {
@@ -182,6 +194,18 @@ async function createWindow(): Promise<void> {
   // in the taskbar never reaches this process, and used to leave the launcher
   // windowed with no gamepad-reachable way out of it.
   holdFullscreen(mainWindow)
+
+  // Beside it, and for the same class of reason: things the launcher has to
+  // notice about its own window whether or not this process asked for them.
+  // What the renderer does with it is refuse to answer the pad while somebody
+  // else has the screen — see `screen.ts`.
+  attachScreenReporting(mainWindow)
+
+  // Two independent readings of the same fact. The renderer logs what its own
+  // `blur` listener saw; this logs what Chromium's window activation did. When
+  // a report says "the launcher acted on input it should not have", the pair is
+  // what says whether the focus signal was wrong or the gate was.
+  logFocusChanges(mainWindow)
 
   // Re-applied on every load, not just the first: a reload resets the zoom
   // factor, and in dev every HMR full-reload would otherwise drop the user

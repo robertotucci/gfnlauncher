@@ -45,10 +45,16 @@ export function shouldStayAwake({
   focused: boolean
   now: number
 }): boolean {
-  // A blurred launcher receives no pad input in the first place — the Gamepad
-  // API only reports to a focused window — so this is mostly about letting go
-  // promptly when the GeForce NOW client takes the screen. Whatever is in front
-  // now is responsible for its own screen.
+  // Whatever is in front now is responsible for its own screen.
+  //
+  // This used to be described as a formality, on the grounds that a blurred
+  // launcher receives no pad input in the first place. It does — see
+  // `@shared/input` — and it is `shouldAcceptInput` that now refuses to act on
+  // it. Which makes this line load-bearing rather than tidy: the renderer stops
+  // reporting activity when it stops answering the pad, so nothing else would
+  // come along to release the inhibit, and the launcher would hold
+  // `prevent-display-sleep` — and with it the session lock — over somebody
+  // else's fullscreen window for the rest of `WAKE_AFTER_INPUT_MS`.
   if (!focused) return false
   if (lastActivityAt === null) return false
   return now - lastActivityAt < WAKE_AFTER_INPUT_MS

@@ -11,6 +11,10 @@ import { getAuthSession } from './partition'
  *   POST {serverUrl}/v1/sync/{provider} -> 202 Accepted, sync runs async
  *   operations: GetApps, GetOAuthURL, LinkAccount, UnlinkAccount, LibrarySync
  *
+ * It authenticates with `Bearer <Starfleet id token>` — see `AlsConfig.token`.
+ * The partition's cookies, which are all the GraphQL API needs, are not enough
+ * here; assuming otherwise is what made every sync answer 401.
+ *
  * `serverUrl` comes from the client's runtime `appConfig.accountLinking`, and a
  * proxy override can replace it, so it is configuration here rather than a
  * constant — see `appConfig.ts`, which reads it off the installed Flatpak.
@@ -33,10 +37,13 @@ export interface AlsConfig {
   /** Base URL, without the trailing /v1. */
   serverUrl: string
   /**
-   * A token ALS itself issued or accepts — **not** the GraphQL credential.
+   * The Starfleet id token, which is what ALS authenticates against — **not**
+   * the GraphQL credential.
    *
-   * Null in practice today: the client authenticates ALS with the Starfleet id
-   * token, which the launcher does not capture. See `authorization()`.
+   * `webAuth.ts` reads it out of the hosted web client's own Starfleet session;
+   * `session.getAlsToken()` withholds it once expired. Null when it could not
+   * be read, and then the request goes out unauthenticated and is refused,
+   * which is a truthful outcome rather than a silent one.
    */
   token: string | null
   clientId: string
@@ -50,20 +57,51 @@ function apiUrl(config: AlsConfig, path: string): string {
 }
 
 /**
- * The captured headers with any credential taken back out.
+ * The captured headers with the GraphQL credential taken back out.
  *
  * The session's `Authorization` belongs to `apps.gxn.nvidia.com` — a real
- * capture reads `authScheme=GFNJWT`, not even a Bearer — and ALS is a different
- * service. Forwarding it is the exact mistake `webAuth.ts` records: a server
- * honours the header over the cookie and *then* rejects it, so sending someone
- * else's credential is worse than sending none. Dropping it can only help: if
- * ALS accepts the partition's cookies this is what makes that work, and if it
- * insists on its own token we have none either way.
+ * capture reads `authScheme=GFNJWT` — and ALS is a different service wanting a
+ * different scheme. Forwarding it is the exact mistake `webAuth.ts` records: a
+ * server honours the header over the cookie and *then* rejects it. The right
+ * credential is put back by `buildSyncRequest`, from `config.token`.
  */
 function replayableHeaders(headers: Record<string, string> = {}): Record<string, string> {
   return Object.fromEntries(
     Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'authorization')
   )
+}
+
+export interface SyncRequest {
+  url: string
+  headers: Record<string, string>
+  body: string
+}
+
+/**
+ * Everything about the sync request that can be decided without a network.
+ *
+ * Separated out because the credential rules here are the whole bug: this ran
+ * for a release sending no `Authorization` at all, on the theory that the
+ * partition's `.geforcenow.com` cookies would carry it, and every sync came
+ * back 401. The shipped client's `AlsService.providerSync` sends
+ * `Bearer <Starfleet id token>` and nothing else does — so the ordering below
+ * matters, and the `Authorization` that arrives in `config.headers` must lose
+ * to the one built here.
+ */
+export function buildSyncRequest(config: AlsConfig, providerId: string): SyncRequest {
+  return {
+    url: apiUrl(config, `sync/${encodeURIComponent(providerId)}`),
+    headers: {
+      ...replayableHeaders(config.headers),
+      'Content-Type': 'application/json',
+      ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
+      ...(config.clientId ? { 'NV-Client-ID': config.clientId } : {}),
+      ...(config.clientVersion ? { 'NV-Client-Version': config.clientVersion } : {})
+    },
+    // The client posts an empty JSON object, not an absent body, under a
+    // Content-Type that promises one.
+    body: '{}'
+  }
 }
 
 /**
@@ -73,39 +111,38 @@ function replayableHeaders(headers: Record<string, string> = {}): Record<string,
  * A 202 means the request was accepted, not that the sync finished. Poll the
  * provider list afterwards rather than assuming the library is current.
  *
- * The bundle authenticates this with the Starfleet *id* token, which is not
- * what the launcher captures. ALS sits on `.geforcenow.com`, the same
- * registrable domain the auth partition holds cookies for, so the request goes
- * out through that partition exactly like a GraphQL call and lets the cookies
- * do the work. If that turns out not to be enough the answer is a 401, and the
- * caller is expected to show it rather than treat it as an internal error.
+ * A 401 is reported as an expired sign-in rather than as a status, because that
+ * is what it means here and it is the one thing the user can act on. The status
+ * still travels on the result so the caller can decide to re-capture and retry.
  */
 export async function syncProvider(
   config: AlsConfig,
   providerId: string
 ): Promise<SyncResult> {
+  const request = buildSyncRequest(config, providerId)
+
   try {
     // Electron's net stack bound to the signed-in partition, not Node's fetch:
     // a bare fetch from the main process carries none of the session and was
     // rejected 401 on the GraphQL API for exactly this reason.
-    const response = await getAuthSession().fetch(
-      apiUrl(config, `sync/${encodeURIComponent(providerId)}`),
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          ...replayableHeaders(config.headers),
-          'Content-Type': 'application/json',
-          // Only ever an ALS token, never the GraphQL one — see above.
-          ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
-          ...(config.clientId ? { 'NV-Client-ID': config.clientId } : {}),
-          ...(config.clientVersion ? { 'NV-Client-Version': config.clientVersion } : {})
-        }
-      }
-    )
+    const response = await getAuthSession().fetch(request.url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: request.headers,
+      body: request.body
+    })
 
     if (response.status === 202) {
-      return { accepted: true, providerId, error: null }
+      return { accepted: true, providerId, status: response.status, error: null }
+    }
+
+    if (response.status === 401) {
+      return {
+        accepted: false,
+        providerId,
+        status: response.status,
+        error: 'Sign-in expired — sign in to GeForce NOW again'
+      }
     }
 
     // A bare status says nothing about why. ALS usually explains.
@@ -113,12 +150,14 @@ export async function syncProvider(
     return {
       accepted: false,
       providerId,
+      status: response.status,
       error: `Sync refused (${response.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`
     }
   } catch (err) {
     return {
       accepted: false,
       providerId,
+      status: null,
       error: err instanceof Error ? err.message : 'Sync request failed'
     }
   }

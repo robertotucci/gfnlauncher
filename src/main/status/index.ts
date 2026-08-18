@@ -19,7 +19,7 @@
  * Only the health verdict needs the wire.
  */
 
-import type { StatusSnapshot } from '@shared/types'
+import type { StatusSnapshot, ZoneAssignment, ZoneStatus } from '@shared/types'
 import { fetchSummary, type StatusFeed } from './statuspage'
 import { readZoneAssignment, resolveZone } from './zone'
 
@@ -94,6 +94,23 @@ export async function getStatus(): Promise<StatusSnapshot> {
 /** Re-checks now, whatever the cache says. What the refresh control calls. */
 export async function refreshStatus(): Promise<StatusSnapshot> {
   return snapshot(await revalidateOnce())
+}
+
+/**
+ * The client's assignment matched onto whatever board this module already holds.
+ *
+ * Exists for `clientWatch.ts`, which re-derives the zone when the client
+ * rewrites `sharedstorage.json` and must do it **without touching the network**
+ * — a push that could fetch would turn a file write in another application
+ * into an outbound request. Exported as a function rather than exposing `feed`,
+ * which stays private here for the same reason the whole cache does.
+ *
+ * With no board yet, `resolveZone` degrades to `{region: null, component: null}`
+ * and that is the honest answer: a renderer that has never opened the Status
+ * view holds no snapshot to merge it into and drops the push anyway.
+ */
+export function currentZone(assignment: ZoneAssignment): ZoneStatus {
+  return resolveZone(assignment, feed?.regions ?? [])
 }
 
 /** Test seam, mirroring `resetCatalog`. */

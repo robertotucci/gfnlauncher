@@ -76,41 +76,112 @@ export async function killGfn(): Promise<void> {
   }
 }
 
+/**
+ * Whether two probes describe the same install.
+ *
+ * Four scalars, and it earns a name because it is used twice: `clientWatch.ts`
+ * pushes on it, and the log line below is gated on it.
+ *
+ * The non-obvious field is `installPath`. A re-deploy of the *same* version
+ * still moves the commit directory — see `probeGfn` — and `appConfig.ts` reads
+ * a file out of that path, so a move with no version change is very much a
+ * change.
+ */
+export function sameClient(previous: GfnClientInfo | null, next: GfnClientInfo): boolean {
+  return (
+    previous !== null &&
+    previous.installed === next.installed &&
+    previous.version === next.version &&
+    previous.installPath === next.installPath &&
+    previous.error === next.error
+  )
+}
+
 /** Memoised because the launch path consults it and pays two execs otherwise. */
 let cachedInfo: GfnClientInfo | null = null
 
+/**
+ * Which probe is allowed to write `cachedInfo`.
+ *
+ * Bumped on entry, checked on exit, and the reason is `clientWatch.ts`: two
+ * probes are now genuinely concurrent, and they can resolve out of order.
+ *
+ *   T0  the launch path calls `detectGfn()` on a cold cache — reads the old commit
+ *   T1  `flatpak update com.nvidia.geforcenow` lands and prunes it
+ *   T2  the watcher calls `detectGfn(true)` — reads the new commit
+ *   T3  the watcher's probe resolves and caches the new path
+ *   T4  the launch path's probe resolves and overwrites it with the pruned one
+ *
+ * From T4 the cached `installPath` is not merely stale, it does not exist, and
+ * `readAlsServerUrl()` ENOENTs on it for the rest of the run. Only the most
+ * recently *started* probe may write, so T4 becomes a no-op.
+ */
+let generation = 0
+
 export async function detectGfn(force = false): Promise<GfnClientInfo> {
   if (cachedInfo && !force) return cachedInfo
-  cachedInfo = await probeGfn()
-  // Once per run, because it is memoised — and it is the fact that decides
-  // whether `launchMode: auto` streams in a browser instead of handing the game
-  // to the client, which is the single most confusing outcome this launcher has.
-  console.info(
-    `GeForce NOW client: installed=${cachedInfo.installed} ` +
-      `version=${cachedInfo.version ?? 'unknown'} ` +
-      `path=${cachedInfo.installPath ?? 'none'}` +
-      (cachedInfo.error ? ` — ${cachedInfo.error}` : '')
-  )
-  return cachedInfo
+
+  const at = ++generation
+  const info = await probeGfn()
+
+  // Superseded: a later probe describes an install this one may already have
+  // been wrong about. Whatever it cached wins; with nothing cached yet, our own
+  // reading is still the only one anybody has.
+  if (at !== generation) return cachedInfo ?? info
+
+  const previous = cachedInfo
+  cachedInfo = info
+
+  // Once per *change*, not once per probe — the watcher re-probes on every
+  // deploy move and this line would otherwise repeat. It is worth writing at
+  // all because it is the fact that decides whether `launchMode: auto` streams
+  // in a browser instead of handing the game to the client, which is the single
+  // most confusing outcome this launcher has.
+  if (!sameClient(previous, info)) {
+    console.info(
+      `GeForce NOW client: installed=${info.installed} ` +
+        `version=${info.version ?? 'unknown'} ` +
+        `path=${info.installPath ?? 'none'}` +
+        (info.error ? ` — ${info.error}` : '')
+    )
+  }
+
+  return info
 }
 
+/**
+ * Asks the host what is installed.
+ *
+ * `--show-location` answers with the **commit directory**, not a stable path:
+ *
+ *   ~/.local/share/flatpak/app/com.nvidia.geforcenow/x86_64/master/<64-hex commit>
+ *
+ * An update deploys a new one and prunes the old, so a remembered `installPath`
+ * does not go stale, it goes away. That is what `clientWatch.ts` watches for.
+ */
 async function probeGfn(): Promise<GfnClientInfo> {
   let installPath: string | null = null
   try {
     const { stdout } = await hostExecFile('flatpak', ['info', '--show-location', GFN_APP_ID])
     installPath = stdout.trim() || null
   } catch (error) {
-    // Three different things reach here and only one of them is "not installed".
+    // Four different things reach here and only one of them is "not installed".
     // Packaged as a Flatpak we may simply not be allowed to ask, and reporting
     // that as an absent client would send the user to reinstall something that
     // was there all along — so the reason travels with the answer and the
     // Settings screen says which it was.
+    //
+    // `timeout` joins `blocked` because the watcher re-probes exactly when the
+    // flatpak installation is busiest: the deploy pointer moved because a
+    // transaction is running, and a portal round trip can outlast
+    // `HOST_TIMEOUT_MS` while it does. `failed` is the only kind that means
+    // flatpak answered and said no.
     const failure = classifyHostFailure(error)
     return {
       installed: false,
       version: null,
       installPath: null,
-      error: failure.kind === 'blocked' ? failure.message : null
+      error: failure.kind === 'blocked' || failure.kind === 'timeout' ? failure.message : null
     }
   }
 

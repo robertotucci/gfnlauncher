@@ -131,7 +131,7 @@ export function readStreamPhase(phase: StreamPhase, chunk: string): StreamPhase 
  * Where the client writes it.
  *
  * A function rather than a module constant for the same reason as
- * `status/zone.ts`'s `storagePath`: `homedir()` is cheap, and a constant
+ * `status/zone.ts`'s `zoneStoragePath`: `homedir()` is cheap, and a constant
  * evaluated at import time is a constant no test can move.
  */
 export function streamLogPath(): string {

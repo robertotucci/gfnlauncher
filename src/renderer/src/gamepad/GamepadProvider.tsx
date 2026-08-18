@@ -8,15 +8,16 @@ import {
   useState,
   type ReactNode
 } from 'react'
+import { SCREEN_OURS, shouldAcceptInput, type InputGate } from '@shared/input'
 import {
   BUTTON_ACTIONS,
   KEY_BINDINGS,
-  REPEAT_DELAY_MS,
-  REPEAT_INTERVAL_MS,
   readDirection,
+  type GamepadAction,
   type Intent,
   type IntentHandler
 } from './intents'
+import { PAD_START, stepPad } from './pad'
 import { detectPadScheme, type InputScheme } from './scheme'
 
 interface GamepadContextValue {
@@ -24,7 +25,13 @@ interface GamepadContextValue {
   subscribe(handler: IntentHandler): () => void
   /** True while at least one pad is connected. */
   connected: boolean
-  /** False when the window has lost focus — the Gamepad API goes silent then. */
+  /**
+   * False when the window has lost focus.
+   *
+   * This is a report, not the gate — `shouldAcceptInput` is the gate, and it
+   * also accepts a blurred launcher that nothing is standing in front of. The
+   * footer shows this one because it is the half a user can act on.
+   */
   windowFocused: boolean
   /** Glyph set for the device in hand: the pad's family, or the keyboard. */
   scheme: InputScheme
@@ -48,6 +55,20 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
   const [connected, setConnected] = useState(false)
   const [windowFocused, setWindowFocused] = useState(() => document.hasFocus())
   const [scheme, setScheme] = useState<InputScheme>('keyboard')
+  /**
+   * Everything `shouldAcceptInput` needs, in a ref rather than in state.
+   *
+   * **The poll loop must not be re-created when any of this changes.** Its
+   * effect has `[emit]` deps for that reason: tearing it down and rebuilding it
+   * would reset the edge baseline `stepPad` carries, which is precisely the
+   * thing that stops the button you quit a game with from firing when the
+   * launcher comes back. So the gate reaches the loop by reference and the
+   * React state beside it exists only for the footer.
+   *
+   * `focused` is re-read from `document.hasFocus()` on every frame; only
+   * `minimised` and `handedOff` are pushed in from outside.
+   */
+  const gate = useRef<InputGate>({ focused: document.hasFocus(), ...SCREEN_OURS })
   /**
    * Which device the legend is currently following. Only a *press* moves it, so
    * plugging a pad in mid-sentence does not relabel the footer under someone
@@ -92,9 +113,12 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
   // Pad polling.
   useEffect(() => {
     let frame = 0
-    let heldDirection: string | null = null
-    let repeatAt = 0
-    const pressed = new Set<string>()
+    let padState = PAD_START
+    /** What the log last said, so only transitions are written down. */
+    let announced = true
+    let suspendedAt = 0
+    /** Frames on which the pad reported something while suspended. See below. */
+    let suspendedFrames = 0
 
     const applyScheme = (next: InputScheme): void => {
       setScheme((current) => (current === next ? current : next))
@@ -123,7 +147,7 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
       const pads = navigator.getGamepads?.() ?? []
       let anyConnected = false
       let direction: ReturnType<typeof readDirection> = null
-      const nowPressed = new Set<string>()
+      const nowPressed = new Set<GamepadAction>()
       /** The pad the legend describes: the one being used, else the first one. */
       let firstPadId: string | null = null
       let activePadId: string | null = null
@@ -160,26 +184,60 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
         applyScheme(detectPadScheme(firstPadId))
       }
 
-      // Buttons fire once per press, never on hold.
-      for (const action of nowPressed) {
-        if (!pressed.has(action)) {
-          emit({ kind: 'action', action: action as never })
+      // Everything above runs whether or not the launcher may act on any of it,
+      // so `connected` and the legend are already correct the instant it comes
+      // back — the footer is the one thing that must not go stale while the
+      // screen belongs to somebody else.
+      const now = performance.now()
+
+      // Read rather than remembered. `focus` and `blur` are notifications and
+      // can be missed: the window is created hidden and shown later, so the
+      // launcher's *first* activation happens before any listener in the
+      // renderer could see it — which left the footer reading
+      // "WINDOW NOT FOCUSED" for the whole of a session that was focused
+      // throughout, and would have left the gate running on `handedOff` alone.
+      // `document.hasFocus()` is the state itself, and this loop is already
+      // asking the browser questions sixty times a second.
+      const focused = document.hasFocus()
+      if (focused !== gate.current.focused) {
+        gate.current = { ...gate.current, focused }
+        setWindowFocused(focused)
+      }
+
+      const accepted = shouldAcceptInput(gate.current)
+
+      if (accepted !== announced) {
+        announced = accepted
+        if (accepted) {
+          console.info(
+            `Pad input resumed after ${Math.round((now - suspendedAt) / 1000)}s; ` +
+              `the pad reported input on ${suspendedFrames} frames while it was suspended.`
+          )
+        } else {
+          suspendedAt = now
+          suspendedFrames = 0
+          const { focused, minimised, handedOff } = gate.current
+          console.info(
+            `Pad input suspended: focused=${focused} minimised=${minimised} handedOff=${handedOff}`
+          )
         }
       }
-      pressed.clear()
-      for (const action of nowPressed) pressed.add(action)
 
-      const now = performance.now()
-      if (direction === null) {
-        heldDirection = null
-      } else if (direction !== heldDirection) {
-        heldDirection = direction
-        repeatAt = now + REPEAT_DELAY_MS
-        emit({ kind: 'move', direction })
-      } else if (now >= repeatAt) {
-        repeatAt = now + REPEAT_INTERVAL_MS
-        emit({ kind: 'move', direction })
-      }
+      // The count is the evidence, and it is the whole reason this is logged at
+      // all: a large number says Chromium went on feeding a blurred window,
+      // which is the fault this gate exists for. A zero across a session the
+      // user knows they mashed the pad through says something else changed and
+      // the gate is doing nothing.
+      if (!accepted && (nowPressed.size > 0 || direction !== null)) suspendedFrames += 1
+
+      const step = stepPad(padState, {
+        pressed: [...nowPressed],
+        direction,
+        accepted,
+        now
+      })
+      padState = step.next
+      for (const intent of step.intents) emit(intent)
     }
 
     frame = requestAnimationFrame(tick)
@@ -187,6 +245,12 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
   }, [emit])
 
   // Keyboard mirror.
+  //
+  // Deliberately not gated. A window that is not focused receives no `keydown`
+  // at all, so the operating system has already applied a stricter rule than
+  // `shouldAcceptInput` would — which is the whole reason this bug was a pad
+  // bug and never a keyboard one, and the whole reason `npm run dev` could not
+  // reproduce it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       // Let text fields keep their own keys.
@@ -211,17 +275,19 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [emit])
 
-  // The Gamepad API only reports to a focused window, so a blurred launcher is
-  // an unresponsive launcher. Surface it rather than letting input die silently.
+  /**
+   * The other half, which only main can answer: whether anything is standing in
+   * front of us.
+   *
+   * Optional, like `padActivity`'s call: a preload that failed to load leaves
+   * `window.launcher` undefined, and the correct behaviour then is the
+   * permissive default this started with rather than a launcher that has also
+   * lost its pad.
+   */
   useEffect(() => {
-    const onFocus = (): void => setWindowFocused(true)
-    const onBlur = (): void => setWindowFocused(false)
-    window.addEventListener('focus', onFocus)
-    window.addEventListener('blur', onBlur)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      window.removeEventListener('blur', onBlur)
-    }
+    return window.launcher?.app.onScreen((screen) => {
+      gate.current = { ...gate.current, ...screen }
+    })
   }, [])
 
   const value = useMemo<GamepadContextValue>(

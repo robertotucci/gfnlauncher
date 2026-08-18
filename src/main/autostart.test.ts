@@ -35,10 +35,9 @@ describe('buildDesktopEntry', () => {
 
   it('asks the session for a startup notification, which is what makes it come up focused', () => {
     // Without this the session mints no activation token, a Wayland toplevel
-    // cannot activate itself, and the launcher arrives at login unfocused — with
-    // no gamepad input, because the Gamepad API only reports to a focused
-    // window. It is the one field here whose absence is invisible in the file
-    // and fatal on the sofa.
+    // cannot activate itself, and the launcher arrives at login unfocused — no
+    // keyboard, no display wake lock, and no claim on the screen. It is the one
+    // field here whose absence is invisible in the file and felt on the sofa.
     expect(fields(buildDesktopEntry({ exec: '/bin/true', icon: 'x' })).StartupNotify).toBe('true')
   })
 

@@ -31,8 +31,15 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { StatusRegion, ZoneAssignment, ZoneStatus } from '@shared/types'
 
-/** Resolved as a function, not a module const: `homedir()` is cheap and this is testable by monkeypatching neither. */
-function storagePath(): string {
+/**
+ * Resolved as a function, not a module const: `homedir()` is cheap and this is
+ * testable by monkeypatching neither.
+ *
+ * Exported for `clientWatch.ts`, which watches this exact path, in the same
+ * spirit as `streamLogPath()` — one definition, so a watch cannot end up
+ * pointed somewhere the reader is not.
+ */
+export function zoneStoragePath(): string {
   return join(
     homedir(),
     '.var',
@@ -140,7 +147,7 @@ function readLatency(network: Record<string, unknown> | null, slug: string | nul
 export async function readZoneAssignment(): Promise<ZoneAssignment> {
   let raw: string
   try {
-    raw = await readFile(storagePath(), 'utf8')
+    raw = await readFile(zoneStoragePath(), 'utf8')
   } catch {
     return {
       ...UNKNOWN,
@@ -194,6 +201,42 @@ export function resolveZone(assignment: ZoneAssignment, regions: StatusRegion[])
   }
 
   return { assignment, region: null, component: null }
+}
+
+/**
+ * Whether two resolutions describe the same thing.
+ *
+ * Load-bearing rather than cosmetic, and the reason is what else lives in
+ * `sharedstorage.json`: the client rewrites that file to rotate a token, bump a
+ * telemetry counter or record a consent, none of which is a routing change. A
+ * watcher that pushed on every write would push several times an hour and say
+ * nothing. This is the comparison that turns "the file moved" into "the
+ * datacenter moved".
+ *
+ * Not deep equality. `region` and `component` are references *into* the cached
+ * status feed, so their identity is `id` and `name` — stringifying a
+ * `StatusRegion` with its component array on every stat tick would cost more
+ * than the read that produced it.
+ */
+export function sameZone(previous: ZoneStatus | null, next: ZoneStatus): boolean {
+  if (previous === null) return false
+
+  const before = previous.assignment
+  const after = next.assignment
+
+  return (
+    before.routing === after.routing &&
+    before.regionName === after.regionName &&
+    before.zoneCode === after.zoneCode &&
+    before.zoneCurrent === after.zoneCurrent &&
+    before.latencyMs === after.latencyMs &&
+    before.error === after.error &&
+    // The match itself can move without the assignment moving: an unchanged
+    // zone code resolves to nothing until the fleet arrives, and to a region
+    // afterwards. That is a different nameplate, so it is a different value.
+    (previous.region?.id ?? null) === (next.region?.id ?? null) &&
+    (previous.component?.name ?? null) === (next.component?.name ?? null)
+  )
 }
 
 /** Casefold and collapse, so spacing and case cannot decide a match. */

@@ -561,23 +561,101 @@ Operations present: `GetApps`, `GetOAuthURL`, `LinkAccount`, `UnlinkAccount`,
 button calls. The sync response carries `numberOfSyncedGames`, `appStoreName`,
 `persona`.
 
-**Auth is the open question.** The bundle's `postRequestToSync` takes the token
-from `idmService.getAuthToken()`, which resolves to the Starfleet **id** token
-(`session.data.idToken`) — not the access token, and not something the launcher
-captures. `src/main/gfn/als.ts` instead issues the request through the auth
-partition with `getAuthSession().fetch(…, { credentials: 'include' })`, betting
-that the `.geforcenow.com` cookies authenticate it the same way they already
-authenticate GraphQL. Unverified. A 401 here is the expected failure mode and is
-surfaced on the settings row rather than swallowed.
+**Not every linked store can be synced, and asking anyway is a 400.** Linking
+and syncing are separate capabilities. The client filters on them before it
+calls:
 
-It sends **no `Authorization` header at all**, and that is a decision, not an
-omission. A real capture logs `authScheme=GFNJWT` with `token from: none`: the
-session's credential is a GFNJWT scoped to `apps.gxn.nvidia.com`, so forwarding
-it to ALS repeats the mistake recorded under *Authentication* below — a server
-honours the header over the cookie and *then* rejects it. Dropping it strictly
-dominates: if ALS takes the cookies, this is what lets it; if it demands its own
-token, we have none either way. `als.ts` filters `Authorization` out of the
-replayed headers and `ipc.ts` passes `token: null`.
+```js
+// OwnershipSyncService
+getSyncRequests(stores, …) { … if (provider && provider.isAccountSyncSupported) { … postRequestToSync(…) } }
+// AccountProvider
+get isAccountSyncingSupported() {
+  return this.digitalStoreInfo.features
+    .filter(f => f.__typename === 'AccountGamesSyncing')
+    .some(f => f.supported === true)
+}
+```
+
+That metadata comes from `appStoreDefinitions` — a slice of the client's
+`GetStaticAppData`, under `requestType=staticAppData`:
+
+```graphql
+appStoreDefinitions(language: $locale) {
+  store
+  features {
+    __typename
+    ... on AccountLinkingSso     { displayProposition supported }
+    ... on AccountGamesSyncing   { displayProposition supported }
+    ... on AccountSubscriptions  { displayProposition }
+  }
+  accountLinkingMetadata { supportedVariantIds isSupported isRequired label }
+}
+```
+
+`APP_STORE_FEATURES` in `queries.ts` asks for the narrowed form and
+`readSyncableStores` in `library.ts` turns it into the `canSync` flag on
+`LinkedProvider`. Measured on a live account: EPIC links but does not sync, and
+`POST /v1/sync/EPIC` answers **400** — which is the mechanical reason Epic games
+have to be marked owned by hand. A store missing from the answer is treated as
+syncable, so a schema change costs a refused request rather than a store that
+silently stops syncing.
+
+**Auth is `Bearer <Starfleet id token>`, and the cookies are not enough.** This
+was an open question for two releases and the answer, once measured, was that
+the bet had lost: sending no `Authorization` and relying on the partition's
+`.geforcenow.com` cookies produced `Sync refused (401)` for every store, every
+time.
+
+The chain in the bundle (client 2.0.87.130) is explicit:
+
+```js
+// AlsService
+createHeader(g)         { return { authorization: `Bearer ${g.token}` } }
+providerSync(g,E,D)     { … this.alsEndpoint.post(this.buildApiUrl("sync/").concat(g), T) … 202 === k?.status }
+postRequestToSync(g,E,D){ return this.idmService.getAuthToken(D,E).pipe(switchMap(T => this.providerSync(g,T,E))) }
+// IdmService
+getAuthToken(b,V)       { return this.starfleetService.getAuthToken(b,V).pipe(map(t => ({ token: t }))) }
+// StarfleetService
+getAuthToken(d,w)       { … .pipe(map(session => session.data.idToken)) }
+```
+
+So it is the Starfleet **id** token, not the access token, and not the GFNJWT.
+The same bundle has three other `createHeader` implementations that build
+`GFNJWT <token>` — LCARS, the Starfleet KV store, and GXT remote config. Which
+scheme goes to which service is the whole distinction, and getting it wrong
+reads as a 401 either way.
+
+**Where that token is, and how the launcher gets it.** Starfleet persists its
+session under `DBName="starfleet"`, `DBKey="starfleetSession"`, in one of two
+backends: `sharedStorage` for the native client, **IndexedDB** for the web build.
+The stored record is
+
+```json
+{ "authProvider": "starfleet", "data": "<btoa(encodeURIComponent(JSON.stringify(session)))>" }
+```
+
+and the decoded session is
+`{ clientToken, accessToken, idToken, user, clientTokenExpiry, accessTokenExpiry, idTokenExpiry }`.
+
+The launcher already hosts that web app on `persist:gfn-session`, and IndexedDB
+is per-origin, so `webAuth.ts` reads the record out of the capture window at the
+end of a successful capture and keeps `idToken` — only `idToken` — in memory.
+This is **not** one of the dead ends below: nothing is read out of the desktop
+client's profile, no OAuth client is borrowed, and none is registered. It is the
+same act as the header interception that already happens, against a different
+store in the same window.
+
+`readIdToken` in `webAuth.ts` is the pure half and is tested; `getAlsToken` in
+`session.ts` withholds the token once its `exp` has passed, so a stale one is
+recognised before ALS has to say so. On a 401 anyway — the token can be revoked
+server-side with no other sign — `ipc.ts` invalidates the session, re-captures
+**once**, and retries. Once, because a headless capture boots the whole web app.
+
+`als.ts` still filters `Authorization` out of the replayed capture headers: that
+one is the GFNJWT scoped to `apps.gxn.nvidia.com`, and forwarding it repeats the
+mistake recorded under *Authentication* below — a server honours the header over
+the cookie and *then* rejects it. The Bearer is put back afterwards, from
+`config.token`, so the built header wins over the captured one.
 
 ## Authentication
 
@@ -669,6 +747,13 @@ Verified: the page loads in that partition and lands on
 
 What interception actually yields: the **endpoint**, the safe **headers**, and
 the **vpcId**. Not a bearer — see above, there isn't one.
+
+One credential does not travel on any request we can watch, and is read out of
+the window's storage instead: the **Starfleet id token**, which ALS needs and
+which the web app only sends when the user links, unlinks or syncs a store. It
+comes from the page's own IndexedDB at the end of the capture — see *ALS* above
+for the record's shape and for why this is not the rejected "read the desktop
+client's on-disk token" route.
 
 The vpcId arrives in the query string, since the web client issues GraphQL over
 GET (`withBody=0`, `parsed=10` on a real session), so both the POST body and the
@@ -843,6 +928,39 @@ Three keys matter:
 Re-pinning does not clear `metaData`, so compare the pin's slug
 (`routingOverride.address.split('.')[0]`) against `metaData.regionName`: if they
 disagree, `zoneName` describes the region the user just left.
+
+**The file is rewritten for reasons that have nothing to do with routing** —
+`starfleetSession` rotating, `gfnTelemetry` counters, `userConsentInfo` — several
+times an hour while the client runs. Anything watching it must therefore compare
+the *resolved* zone and not the mtime, or it will report a datacenter change on
+every token refresh. That comparison is `sameZone` in `src/main/status/zone.ts`;
+`src/main/clientWatch.ts` is what calls it.
+
+### The deploy layout, and why an install path expires
+
+`flatpak info --show-location com.nvidia.geforcenow` answers with the **commit
+directory**, not a stable path:
+
+```
+~/.local/share/flatpak/app/com.nvidia.geforcenow/
+  current -> x86_64/master
+  x86_64/master/active -> a6efb689…                 # 64-hex commit, one dir per deploy
+  x86_64/master/a6efb689…/files/mall/…              # what --show-location prints
+```
+
+An update deploys a new commit directory and **prunes the old one**, so a
+remembered `installPath` is not merely out of date — it is an ENOENT. That is
+what makes memoising anything read out of it (`appConfig.ts`) a trap.
+
+It is also the signal. `stat` follows symlinks, so statting
+`<root>/app/com.nvidia.geforcenow/current/active` returns the *deployed commit's*
+inode and the repoint arrives as an ordinary change; `current` keeps the path
+free of the architecture and the branch. Verified with `fs.watchFile` from inside
+the launcher's own Flatpak, where `HOME` is the real home and both installation
+roots — `~/.local/share/flatpak` and `/var/lib/flatpak` — are readable under the
+grants the manifest already carries. `~/.local/share/flatpak/.changed` is flatpak's
+own change-notify file and would be one target instead of two, but the grant is
+the *app subdirectory*, so it is not visible from the sandbox.
 
 ### NVIDIA ships unminified TypeScript in sourcemaps
 

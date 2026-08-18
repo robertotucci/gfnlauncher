@@ -171,7 +171,7 @@ None of this is required, and none of it is bundled. The launcher drives whateve
 
 ### A pointer and a keyboard on the pad — AntiMicroX
 
-This closes the two gaps the launcher admits to. NVIDIA's sign-in page is not gamepad-navigable, and the desktop you land on after **Back to desktop** cannot be left with a pad either — the Gamepad API only reports to a focused window, so a blurred launcher is a deaf one. The catalogue adds a third: 1 835 of its titles are keyboard-and-mouse only. [AntiMicroX](https://github.com/AntiMicroX/antimicrox) maps sticks to a pointer and buttons to keys through `/dev/uinput`, which is kernel-side — so the launcher, the GeForce NOW client and the stream all see an ordinary mouse and keyboard, sandbox or no sandbox.
+This closes the two gaps the launcher admits to. NVIDIA's sign-in page is not gamepad-navigable, and the desktop you land on after **Back to desktop** cannot be left with a pad either — a minimised launcher stops acting on input, and no pad can un-iconify a window in the first place. The catalogue adds a third: 1 835 of its titles are keyboard-and-mouse only. [AntiMicroX](https://github.com/AntiMicroX/antimicrox) maps sticks to a pointer and buttons to keys through `/dev/uinput`, which is kernel-side — so the launcher, the GeForce NOW client and the stream all see an ordinary mouse and keyboard, sandbox or no sandbox.
 
 ```bash
 flatpak install flathub io.github.antimicrox.antimicrox
@@ -214,7 +214,7 @@ paru -S game-devices-udev               # permissions for pads no rule covers ye
 
 ### Checking what the kernel actually sees
 
-The footer is the first test and costs nothing: no pad at all reads `NO GAMEPAD DETECTED`, and a pad the launcher cannot hear because another window took focus reads `WINDOW NOT FOCUSED — PAD INPUT PAUSED`. Past that, `evtest` names each button as you press it, which is how you find out whether a pad reports the standard layout or something this launcher will not recognise.
+The footer is the first test and costs nothing: no pad at all reads `NO GAMEPAD DETECTED`, and a pad the launcher is deliberately ignoring because another window took focus reads `WINDOW NOT FOCUSED — PAD INPUT PAUSED`. Past that, `evtest` names each button as you press it, which is how you find out whether a pad reports the standard layout or something this launcher will not recognise.
 
 ## Reporting a problem
 

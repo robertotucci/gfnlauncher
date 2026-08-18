@@ -121,6 +121,36 @@ export function holdFullscreen(window: BrowserWindow): void {
 }
 
 /**
+ * Writes down when the launcher gained or lost focus, and what it looked like.
+ *
+ * Cheap, and it earns its place because focus is now load-bearing rather than
+ * merely interesting: the renderer refuses to act on the pad while something
+ * else has the screen, and `focus`/`blur` on `window` is half of how it decides.
+ * Those events fire in the renderer; these fire in main, from Chromium's own
+ * window activation. Two independent observations of one fact, in one file.
+ *
+ * That pairing is the point. "The launcher acted on input it should not have"
+ * and "the launcher stopped answering the pad" are opposite complaints with the
+ * same three candidate causes, and the only way to tell them apart after the
+ * fact is whether both sides saw the same thing at the same moment.
+ *
+ * A handful of lines per session: focus changes when the user starts a game,
+ * quits one, or alt-tabs — which is exactly the set of moments a report is about.
+ */
+export function logFocusChanges(window: BrowserWindow): void {
+  const record = (state: 'gained' | 'lost') => (): void => {
+    if (window.isDestroyed()) return
+    console.info(
+      `Launcher ${state} focus: visible=${window.isVisible()} ` +
+        `minimised=${window.isMinimized()} fullscreen=${window.isFullScreen()}`
+    )
+  }
+
+  window.on('focus', record('gained'))
+  window.on('blur', record('lost'))
+}
+
+/**
  * Brings the launcher back after something else had the screen.
  *
  * ── Why this is a sequence and not a `focus()` ──────────────────────────────
@@ -138,8 +168,13 @@ export function holdFullscreen(window: BrowserWindow): void {
  * is usually the only other window. The common case tends to resolve itself and
  * this sequence is what covers the rest.
  *
- * Getting it wrong is not cosmetic — the Gamepad API only reports to a focused
- * window, so a launcher that comes back unfocused is a launcher with no input.
+ * Getting it wrong is not cosmetic, though it is survivable, and the difference
+ * is worth knowing. A launcher that comes back unfocused is one the user can
+ * still drive: `shouldAcceptInput` accepts a blurred window that nothing is
+ * standing in front of, precisely because this sequence can be declined and a
+ * launcher nobody can drive is the worst outcome this product has. What is lost
+ * is everything else focus buys — the keyboard, the display wake lock, and any
+ * confidence about what is actually on screen.
  */
 export async function restoreLauncher(window: BrowserWindow | null): Promise<void> {
   if (!window || window.isDestroyed()) return

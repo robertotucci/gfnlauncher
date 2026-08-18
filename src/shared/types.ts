@@ -5,6 +5,7 @@
  * that all three bundles can consume it.
  */
 
+import type { ScreenOwnership } from './input'
 import { DEFAULT_ACCENT, DEFAULT_UI_SCALE } from './theme'
 
 /** A digital store that GeForce NOW can link to and sync a library from. */
@@ -119,6 +120,17 @@ export interface LinkedProvider {
   /** ISO 8601, or null when never synced. */
   syncedAt: string | null
   gamesSynced: number | null
+  /**
+   * Whether this store does library sync at all.
+   *
+   * Linking and syncing are separate capabilities: Epic can be connected and
+   * still owns nothing GFN will pull, which is why its games have to be marked
+   * by hand. GFN's own client checks this before it asks, and asking anyway is
+   * a 400 the user can do nothing about. True when GFN did not say, so an
+   * unanswered question degrades to the old behaviour rather than to a store
+   * that silently stops syncing.
+   */
+  canSync: boolean
 }
 
 export interface GfnClientInfo {
@@ -259,6 +271,14 @@ export interface SyncResult {
   /** ALS returns 202 (accepted); the sync itself completes asynchronously. */
   accepted: boolean
   providerId: string
+  /**
+   * HTTP status, or null when the request never got an answer.
+   *
+   * Carried so that "the credential was refused" can be told from "the service
+   * is unwell" without parsing `error`. Main uses it to decide whether a
+   * re-capture is worth trying; the renderer ignores it.
+   */
+  status: number | null
   error: string | null
 }
 
@@ -636,6 +656,16 @@ export interface AuthResult {
 export interface LauncherApi {
   gfn: {
     info(): Promise<GfnClientInfo>
+    /**
+     * Fires when the installed client changes: updated, installed or removed
+     * while the launcher was open. Returns its own unsubscribe.
+     *
+     * There is nothing to poll for this. The renderer asks `info()` once at
+     * mount and has no later moment at which asking again would mean anything,
+     * and nothing in the renderer polls at all — the one repeat clock in that
+     * process is the gamepad loop, deliberately.
+     */
+    onClient(listener: (info: GfnClientInfo) => void): () => void
     launch(request: LaunchRequest): Promise<LaunchResult>
     /**
      * Opens the GFN client on its own home screen, with no game.
@@ -689,6 +719,17 @@ export interface LauncherApi {
     get(): Promise<StatusSnapshot>
     /** Re-checks now, ignoring the cache. What the refresh control calls. */
     refresh(): Promise<StatusSnapshot>
+    /**
+     * Fires when the client's datacenter moves — the user changed their server
+     * location in the GeForce NOW app, or a session came back from a different
+     * zone. Returns its own unsubscribe.
+     *
+     * Carries **only** the zone, not a snapshot: merge it into the one already
+     * held and drop it when there is none. A zone with no board behind it would
+     * have to invent a `fetchedAt` and an `error`, and a screen the user has
+     * never opened has nothing to correct anyway.
+     */
+    onZone(listener: (zone: ZoneStatus) => void): () => void
   }
   recent: {
     /**
@@ -748,9 +789,10 @@ export interface LauncherApi {
      * Steps aside without closing: leaves fullscreen and minimises.
      *
      * Deliberately not a `PowerAction` — those become arguments to `systemctl`,
-     * and this ends nothing. Note that the Gamepad API only reports to a focused
-     * window, so the pad cannot undo this; coming back needs a mouse or a
-     * keyboard, and the UI has to say so.
+     * and this ends nothing. Note that the pad cannot undo this: a minimised
+     * launcher stops acting on input (`shouldAcceptInput`) and could not raise
+     * itself in any case. Coming back needs a mouse or a keyboard, and the UI
+     * has to say so.
      */
     minimize(): Promise<void>
     /**
@@ -788,5 +830,17 @@ export interface LauncherApi {
      * throws: every field is read out of this process's own state.
      */
     diagnostics(): Promise<Diagnostics>
+    /**
+     * Who has the screen, whenever that changes.
+     *
+     * The second subscription on this bridge, written out for the same reason as
+     * `update.onProgress` rather than exposed as a generic `on(channel, …)`.
+     * `GamepadProvider` folds it into `shouldAcceptInput`; nothing else reads it.
+     *
+     * The current value is re-sent on every load, so a renderer brought back
+     * after `render-process-gone` does not resume mid-game believing it is the
+     * thing on screen.
+     */
+    onScreen(listener: (screen: ScreenOwnership) => void): () => void
   }
 }

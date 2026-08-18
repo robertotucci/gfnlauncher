@@ -1,11 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
+import type { ScreenOwnership } from '@shared/input'
 import type {
+  GfnClientInfo,
   LaunchRequest,
   LauncherApi,
   PowerAction,
   Settings,
-  UpdateProgress
+  UpdateProgress,
+  ZoneStatus
 } from '@shared/types'
 
 /**
@@ -16,6 +19,13 @@ import type {
 const api: LauncherApi = {
   gfn: {
     info: () => ipcRenderer.invoke(IPC.gfnInfo),
+    onClient: (listener: (info: GfnClientInfo) => void) => {
+      const forward = (_event: unknown, info: GfnClientInfo): void => listener(info)
+      ipcRenderer.on(IPC.gfnClient, forward)
+      return () => {
+        ipcRenderer.off(IPC.gfnClient, forward)
+      }
+    },
     launch: (request: LaunchRequest) => ipcRenderer.invoke(IPC.gfnLaunch, request),
     open: () => ipcRenderer.invoke(IPC.gfnOpen)
   },
@@ -40,7 +50,14 @@ const api: LauncherApi = {
   },
   status: {
     get: () => ipcRenderer.invoke(IPC.statusGet),
-    refresh: () => ipcRenderer.invoke(IPC.statusRefresh)
+    refresh: () => ipcRenderer.invoke(IPC.statusRefresh),
+    onZone: (listener: (zone: ZoneStatus) => void) => {
+      const forward = (_event: unknown, zone: ZoneStatus): void => listener(zone)
+      ipcRenderer.on(IPC.statusZone, forward)
+      return () => {
+        ipcRenderer.off(IPC.statusZone, forward)
+      }
+    }
   },
   recent: {
     list: () => ipcRenderer.invoke(IPC.recentList)
@@ -54,15 +71,16 @@ const api: LauncherApi = {
     apply: () => ipcRenderer.invoke(IPC.updateApply),
     restart: () => ipcRenderer.invoke(IPC.updateRestart),
     /**
-     * The one subscription on this bridge, and the reason it is written out
-     * rather than exposed as a generic `on(channel, …)`: the same rule that
-     * keeps `invoke` off this object applies in reverse. The renderer can
-     * listen to this and to nothing else.
+     * The shape every subscription on this bridge is written in, and the reason
+     * they are written out rather than exposed as a generic `on(channel, …)`:
+     * the same rule that keeps `invoke` off this object applies in reverse. The
+     * renderer can listen to the four channels named here and to nothing else.
      *
      * The listener is handed the payload alone. `IpcRendererEvent` carries a
      * `sender`, and a live `ipcRenderer` handle reaching the renderer would
      * undo the whole arrangement — so the event stays on this side and only
-     * data crosses.
+     * data crosses. Each one returns its own unsubscribe, which is what a React
+     * effect can return directly as its cleanup.
      */
     onProgress: (listener: (progress: UpdateProgress) => void) => {
       const forward = (_event: unknown, progress: UpdateProgress): void => listener(progress)
@@ -81,7 +99,15 @@ const api: LauncherApi = {
     // for and no failure the renderer could act on, and a promise nobody awaits
     // is a worse description of that than a send.
     padActivity: () => ipcRenderer.send(IPC.appPadActivity),
-    diagnostics: () => ipcRenderer.invoke(IPC.appDiagnostics)
+    diagnostics: () => ipcRenderer.invoke(IPC.appDiagnostics),
+    /** Written out the long way for the reasons on `update.onProgress` above. */
+    onScreen: (listener: (screen: ScreenOwnership) => void) => {
+      const forward = (_event: unknown, screen: ScreenOwnership): void => listener(screen)
+      ipcRenderer.on(IPC.appScreen, forward)
+      return () => {
+        ipcRenderer.off(IPC.appScreen, forward)
+      }
+    }
   }
 }
 

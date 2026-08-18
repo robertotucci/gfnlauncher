@@ -506,7 +506,9 @@ export function SettingsScreen({
                 >
                   <span>{provider.label}</span>
                   <Badge variant="secondary" className="font-mono text-xs tabular-nums">
-                    {provider.gamesSynced ?? 0} synced
+                    {/* "0 synced" on a store that never syncs reads as a fault
+                        that never clears. Epic is the one people hit. */}
+                    {provider.canSync ? `${provider.gamesSynced ?? 0} synced` : 'no sync'}
                   </Badge>
                 </div>
               ))}

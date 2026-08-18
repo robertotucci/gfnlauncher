@@ -177,6 +177,8 @@ export function App(): ReactNode {
   const [storeBusy, setStoreBusy] = useState(false)
   const [storeNotice, setStoreNotice] = useState<string | null>(null)
   const [handoff, setHandoff] = useState(false)
+  /** The same fact as `handoff`, reachable from a callback with `[]` deps. */
+  const launching = useRef(false)
   /** Why the last launch failed, or null. Cleared by the next press. */
   const [launchNotice, setLaunchNotice] = useState<LaunchNoticeState | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -461,6 +463,17 @@ export function App(): ReactNode {
   }, [view])
 
   const launch = useCallback(async (game: GfnGame) => {
+    // One launch at a time, and a ref rather than the `handoff` state because
+    // this callback has `[]` deps and never sees a newer one.
+    //
+    // Not a nicety: `gfn:launch` opens by killing whatever GeForce NOW instance
+    // is running, so a second press during the two seconds it takes to settle
+    // and spawn would kill the client that the first press had just started.
+    // The input gate does not cover this — the launcher still has focus for the
+    // first moment of a handoff — and ☰ is both "Play" and the button somebody
+    // reaches for out of impatience.
+    if (launching.current) return
+    launching.current = true
     setHandoff(true)
     setLaunchNotice(null)
 
@@ -475,11 +488,17 @@ export function App(): ReactNode {
         setRecentIds(await window.launcher.recent.list())
         // Only the happy path gets the full hold: HANDING OFF is meant to cover
         // the seconds before GFN takes the screen, and there is nothing to
-        // cover when nothing is coming.
-        window.setTimeout(() => setHandoff(false), 2500)
+        // cover when nothing is coming. The re-entrancy guard runs out with it,
+        // since that is exactly the window in which a second launch would kill
+        // the client this one started.
+        window.setTimeout(() => {
+          launching.current = false
+          setHandoff(false)
+        }, 2500)
         return
       }
 
+      launching.current = false
       setHandoff(false)
       setLaunchNotice({ reason: launchFailureReason(result), command: result.command })
     } catch (error) {
@@ -489,6 +508,7 @@ export function App(): ReactNode {
       // claiming a game is starting when nothing is, which is worse than any
       // error it could show instead.
       console.error('Launch request failed:', error)
+      launching.current = false
       setHandoff(false)
       setLaunchNotice({
         reason: 'The launcher could not reach its own main process.',
@@ -880,6 +900,20 @@ export function App(): ReactNode {
   useIntent((intent) => {
     const shotsOpen = shots !== null
 
+    // A layer on its way out still owns the screen; input during those few
+    // frames would act on something the user can no longer see. Above the
+    // `move` branch rather than below it, which is where it used to sit: the
+    // cursor was free to walk out of a panel that was still on screen while
+    // every button was correctly ignored, and there is no reason for the two to
+    // disagree.
+    if (detailsClosing || searchClosing || shotsClosing || powerClosing || updateClosing) return
+
+    // An update being installed is the one modal state the launcher does not
+    // let you leave. Closing would not stop the download, and a dialog that
+    // says "installing" while the user is back on the grid is a lie about what
+    // the machine is doing. It is seconds long and it ends by itself.
+    if (updateApplying) return
+
     if (intent.kind === 'move') {
       // The viewer holds one image, so there is nowhere for the spatial model
       // to move to. Left and right page the set instead.
@@ -891,16 +925,6 @@ export function App(): ReactNode {
       move(intent.direction)
       return
     }
-
-    // A layer on its way out still owns the screen; input during those few
-    // frames would act on something the user can no longer see.
-    if (detailsClosing || searchClosing || shotsClosing || powerClosing || updateClosing) return
-
-    // An update being installed is the one modal state the launcher does not
-    // let you leave. Closing would not stop the download, and a dialog that
-    // says "installing" while the user is back on the grid is a lie about what
-    // the machine is doing. It is seconds long and it ends by itself.
-    if (updateApplying) return
 
     const detailsOpen = detailsGame !== null
 
@@ -1061,8 +1085,14 @@ export function App(): ReactNode {
 
       const accepted = results.filter((result) => result.accepted).length
       if (accepted === 0) {
+        // Every store that refused, not just the first one. Stores usually fail
+        // together and for the same reason, so the distinct set is one sentence
+        // in the common case and the whole truth in the one that matters.
+        const reasons = [
+          ...new Set(results.map((result) => result.error).filter((error) => error !== null))
+        ]
         setSyncFailed(true)
-        setSyncNotice(results[0]?.error ?? 'No store accepted the request.')
+        setSyncNotice(reasons.join(' · ') || 'No store accepted the request.')
         return
       }
 
@@ -1168,6 +1198,36 @@ export function App(): ReactNode {
   // exists to display could never be read. The honest report of a missing
   // preload has to outlive the missing preload.
   useEffect(() => window.launcher?.update.onProgress(setUpdateProgress), [])
+
+  /**
+   * The GeForce NOW client changing underneath us — updated, installed or
+   * removed while this window has been open.
+   *
+   * `gfn.info()` in the boot effect above answers once and there is no later
+   * moment at which asking again would occur to anyone, so main tells instead.
+   * Nothing else is needed in the UI: `signalState` already puts `handoff`
+   * ahead of `client`, so a version arriving mid-launch cannot flicker the
+   * footer while a game is starting.
+   */
+  useEffect(() => window.launcher?.gfn.onClient(setClient), [])
+
+  /**
+   * The datacenter moving, which happens in the GeForce NOW app rather than
+   * here — so the launcher is behind the user when it does, and a Status screen
+   * left open would otherwise keep naming the region they left.
+   *
+   * Only the zone crosses, so it is merged into the snapshot rather than
+   * replacing it. With no snapshot yet the push is dropped on purpose: entering
+   * the view fetches a whole one, and half a board with an invented timestamp
+   * would be worse than none.
+   */
+  useEffect(
+    () =>
+      window.launcher?.status.onZone((zone) =>
+        setStatus((previous) => (previous ? { ...previous, zone } : previous))
+      ),
+    []
+  )
 
   /**
    * Counts down to the restart, then asks for it.

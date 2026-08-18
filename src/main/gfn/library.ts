@@ -3,6 +3,7 @@ import type { LinkedProvider } from '@shared/types'
 import { execute, type GfnGraphQLConfig } from './graphql'
 import {
   ADD_OWNED_VARIANT,
+  APP_STORE_FEATURES,
   REMOVE_OWNED_VARIANT,
   SELECT_OWNED_VARIANT,
   USER_ACCOUNT_LINKING
@@ -21,6 +22,47 @@ interface RawStoreData {
   } | null
 }
 
+interface RawStoreDefinition {
+  store?: string | null
+  features?: ({ __typename?: string | null; supported?: boolean | null } | null)[] | null
+}
+
+/**
+ * The stores GFN will pull a library from, by store id.
+ *
+ * Its own failure is swallowed on purpose, and only this one: the answer is an
+ * optimisation — it spares ALS a request it would refuse — and losing it must
+ * not cost the sync everywhere else. An absent entry therefore reads as "may
+ * sync", which is what the launcher assumed before this query existed.
+ */
+export async function readSyncableStores(
+  config: GfnGraphQLConfig
+): Promise<Set<string> | null> {
+  try {
+    const data = await execute<{ appStoreDefinitions?: RawStoreDefinition[] | null }>(
+      config,
+      'staticAppData',
+      APP_STORE_FEATURES,
+      { locale: config.locale }
+    )
+
+    const syncable = new Set<string>()
+    for (const definition of data.appStoreDefinitions ?? []) {
+      if (!definition?.store) continue
+      const supported = (definition.features ?? []).some(
+        (feature) => feature?.__typename === 'AccountGamesSyncing' && feature.supported === true
+      )
+      if (supported) syncable.add(definition.store)
+    }
+    // An empty set is indistinguishable from a schema change that renamed the
+    // union member, and acting on it would disable sync for every store.
+    return syncable.size > 0 ? syncable : null
+  } catch (error) {
+    console.error('Store sync capabilities could not be read:', error)
+    return null
+  }
+}
+
 /**
  * Lists the user's linked store accounts and their sync state.
  *
@@ -29,12 +71,15 @@ interface RawStoreData {
  * offer it as something they *could* connect.
  */
 export async function listProviders(config: GfnGraphQLConfig): Promise<LinkedProvider[]> {
-  const data = await execute<{ userAccount?: { storesData?: RawStoreData[] | null } | null }>(
-    config,
-    'userAccount',
-    USER_ACCOUNT_LINKING,
-    {}
-  )
+  const [data, syncable] = await Promise.all([
+    execute<{ userAccount?: { storesData?: RawStoreData[] | null } | null }>(
+      config,
+      'userAccount',
+      USER_ACCOUNT_LINKING,
+      {}
+    ),
+    readSyncableStores(config)
+  ])
 
   return (data.userAccount?.storesData ?? [])
     .filter((entry): entry is RawStoreData & { store: string } => Boolean(entry?.store))
@@ -53,7 +98,8 @@ export async function listProviders(config: GfnGraphQLConfig): Promise<LinkedPro
         label: storeLabel(entry.store),
         state,
         syncedAt: syncing?.syncDate ?? null,
-        gamesSynced: syncing?.totalNumberOfSyncedGfnGames ?? null
+        gamesSynced: syncing?.totalNumberOfSyncedGfnGames ?? null,
+        canSync: syncable?.has(entry.store) ?? true
       }
     })
 }

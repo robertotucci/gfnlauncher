@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [Unreleased]
+
+## [0.1.1] - 2026-08-19
+
+### Fixed
+
+- **The pad no longer drives the launcher while a game is streaming.** With a game running, every stick push and button press was also reaching the launcher sitting behind it — the cursor moved, panels opened, and because ☰ is Play, a pause menu could restart the very client that was streaming. The launcher now stops acting on input whenever something else has the screen: a game, the GeForce NOW client opened from Settings, the web player, or the sign-in window. It starts answering again the moment that window goes away, and a button still held as it comes back does not count as a fresh press.
+- **The launcher notices when GeForce NOW changes underneath it.** The version it reported, the datacenter it named on the Status screen and the settings it reads out of the installed client were all looked up once at start and never again — so a client that updated in the background, or a server location changed in the GeForce NOW app, left the launcher describing something that was no longer true until it was restarted. It now follows all of it while it runs, including a client installed or removed mid-session.
+- **"Refresh every store library" works instead of answering "sync refused (401)".** The request was going out without the credential the service actually wants, on the assumption that being signed in was enough — it is for the catalogue, and it is not for this. The launcher now sends the right one, notices when it has gone stale, and quietly renews it and tries once more if the service turns it down anyway. When a store still refuses, the row says which ones and why, rather than reporting only the first.
+- **A second press of ☰ during a hand-off no longer kills the game that is starting.** Launching begins by closing any running GeForce NOW client, so an impatient second press ended the session the first one had just opened.
+- **A refresh no longer asks stores that do not do library sync.** Connecting a store and syncing a library are two different things — Epic offers the first and not the second — and asking anyway was an error on every refresh, hidden because the other stores succeeded. Those stores are now left out of the refresh and their badge reads "no sync" rather than a "0 synced" that was never going to change.
+- **After a GeForce NOW update, "Refresh every store library" no longer talks to the wrong service.** An update moves the client's files, and the launcher was still reading its configuration from where they used to be — falling back to a built-in default address and remembering that default for the rest of the session, which quietly broke syncing for anyone whose client points somewhere else.
+- **The screen stops being held awake as soon as another window takes the focus**, instead of up to half a minute later.
+- **The cursor no longer moves inside a panel that is closing.** Buttons were already ignored during those few frames; directions were not.
+
 ## [0.1.0] - 2026-08-17
 
 First public release.
@@ -35,4 +50,5 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
+[0.1.1]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.1
 [0.1.0]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0

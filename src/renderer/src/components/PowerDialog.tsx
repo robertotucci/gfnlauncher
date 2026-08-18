@@ -136,9 +136,9 @@ export function PowerDialog({
           <Choice
             id="power:desktop"
             label="Back to desktop"
-            // The one thing the user cannot find out by trying: the Gamepad API
-            // only reports to a focused window, so the pad goes dead the moment
-            // the launcher is minimised.
+            // The one thing the user cannot find out by trying: the launcher
+            // stops acting on the pad the moment it is minimised, and there is
+            // nothing a pad can do to un-minimise a window anyway.
             description="Hides the launcher without closing it. Comes back with a mouse or keyboard, not the pad."
             Icon={Monitor}
             disabled={busy}

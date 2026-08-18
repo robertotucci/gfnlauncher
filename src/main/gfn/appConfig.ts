@@ -52,8 +52,14 @@ let cached: string | null = null
 /**
  * Base URL of the Account Linking Service, from the installed client.
  *
- * Memoised: the file does not change while the launcher runs, and the lookup
- * costs a `flatpak info` on top of the read.
+ * Memoised, but **only a successful read** — and that distinction is the bug it
+ * was written to fix. The install path this reads under is a commit directory
+ * that an update prunes (see `probeGfn`), so a client updating mid-run turns
+ * one lookup into an ENOENT. Caching the fallback on that would lose a
+ * proxy-overridden ALS host for the rest of the run, silently, and every
+ * library sync afterwards would talk to the wrong service. Recomputing the
+ * fallback costs a `flatpak info` and a failed `open` on a path that is about
+ * to be corrected by `clientWatch.ts` anyway.
  */
 export async function readAlsServerUrl(): Promise<string> {
   if (cached) return cached
@@ -75,11 +81,16 @@ export async function readAlsServerUrl(): Promise<string> {
     }
   }
 
-  cached = ALS_FALLBACK_URL
-  return cached
+  return ALS_FALLBACK_URL
 }
 
-/** Test seam, mirroring `resetCatalog`. */
+/**
+ * Test seam, mirroring `resetCatalog` — and what `clientWatch.ts` calls when
+ * the client's deploy moves, since the file this read came out of has been
+ * replaced by then. Belt and braces rather than load-bearing: only a successful
+ * read is cached, so the worst a missed call costs is a URL from the previous
+ * install of the same client.
+ */
 export function resetAppConfig(): void {
   cached = null
 }
