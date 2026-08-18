@@ -48,6 +48,19 @@ if [ ! -d "$PAGES_DIR/objects" ]; then
   ostree init --repo="$PAGES_DIR" --mode=archive-z2
 fi
 
+# Everything the build produced except the debug symbols, which flatpak-builder
+# splits into a .Debug extension of its own. Nobody installs those to play a
+# game with a pad, and for an Electron application they are large enough to
+# matter against the gigabyte GitHub Pages will serve. Naming the refs rather
+# than letting build-commit-from take all of them is the only way to leave one
+# behind. .Locale is deliberately *not* filtered: it is an extension flatpak
+# installs alongside the application, and dropping it drops translations.
+mapfile -t refs < <(ostree --repo="$BUILD_REPO" refs | grep -v '\.Debug/' || true)
+if [ ${#refs[@]} -eq 0 ]; then
+  echo "::error::$BUILD_REPO has no refs to publish" >&2
+  exit 1
+fi
+
 # `build-commit-from` rather than `ostree pull-local`, and the difference is
 # the whole point of publishing this way. Each CI run builds into an empty
 # repository, so its commit has no parent; pulling that across would leave the
@@ -56,12 +69,12 @@ fi
 # related. build-commit-from writes a *new* commit in the destination whose
 # parent is whatever was published last, which is what lets the next section
 # produce a delta instead of a second full copy.
-echo "Committing the build into the published repository"
+echo "Committing ${#refs[@]} ref(s) into the published repository"
 flatpak build-commit-from \
   --src-repo="$BUILD_REPO" \
   --update-appstream \
   --gpg-sign="$KEY" \
-  "$PAGES_DIR"
+  "$PAGES_DIR" "${refs[@]}"
 
 # --generate-static-deltas is what an existing installation downloads instead
 # of the whole application: between two releases of the same Electron version
