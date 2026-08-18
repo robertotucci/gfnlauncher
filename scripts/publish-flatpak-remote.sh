@@ -48,6 +48,30 @@ if [ ! -d "$PAGES_DIR/objects" ]; then
   ostree init --repo="$PAGES_DIR" --mode=archive-z2
 fi
 
+# **Git cannot store an empty directory, and an OSTree repository has five.**
+#
+# The published repository arrives here as a clone of `gh-pages`, so
+# `extensions/`, `refs/mirrors/`, `refs/remotes/`, `state/` and `tmp/cache/` —
+# all still empty after a publish — are silently absent from the checkout.
+# `--generate-static-deltas` lists refs across all three ref roots and dies on
+# the first one missing:
+#
+#   error: Listing refs: opendir(refs/remotes): No such file or directory
+#
+# This cannot happen on the first release and happens on every one after it,
+# which is exactly the shape of bug that ships: the run that proves the
+# machinery works is the run that cannot hit it. `ostree init` is not the
+# recovery — it declines a directory that already holds a repository — so the
+# skeleton is restored unconditionally instead.
+mkdir -p \
+  "$PAGES_DIR/extensions" \
+  "$PAGES_DIR/objects" \
+  "$PAGES_DIR/state" \
+  "$PAGES_DIR/tmp/cache" \
+  "$PAGES_DIR/refs/heads" \
+  "$PAGES_DIR/refs/mirrors" \
+  "$PAGES_DIR/refs/remotes"
+
 # Everything the build produced except the debug symbols, which flatpak-builder
 # splits into a .Debug extension of its own. Nobody installs those to play a
 # game with a pad, and for an Electron application they are large enough to
