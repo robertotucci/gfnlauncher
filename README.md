@@ -40,9 +40,25 @@ You do not need a GeForce NOW account to browse or to launch: the deep link goes
 
 **You already have Flatpak.** GeForce NOW on Linux *is* a Flatpak, so the one prerequisite for the recommended install is the same thing this launcher requires anyway. Nothing new to adopt.
 
-### Flatpak bundle — recommended, any distribution
+### Flatpak from this project's own remote — recommended, and updates itself
 
-Works on every distribution, offline, and needs no remote.
+```bash
+flatpak remote-add --if-not-exists --user gfnlauncher \
+  https://robertotucci.github.io/gfnlauncher/gfnlauncher.flatpakrepo
+flatpak install --user gfnlauncher io.github.robertotucci.GfnLauncher
+```
+
+Two commands once, and then nothing to do again: `flatpak update` carries every later release, and so does **Install the update** inside the launcher. Updates arrive as deltas — a new version costs a few megabytes rather than ninety, because everything that did not change is already on your disk.
+
+The repository is signed, and `flatpak remote-add` reads the key out of the `.flatpakrepo` along with the address. There is no key to copy by hand and no `--no-gpg-verify` anywhere in that command: an unsigned build cannot reach you through this remote.
+
+You need Flathub configured as well, though not for this launcher — the runtime it runs on, `org.freedesktop.Platform`, comes from there, as it does for most Flatpaks on your machine. If GeForce NOW is installed you almost certainly already have it.
+
+This launcher is **not on Flathub** and there is no build to install from there. This remote is what stands in for it, and it is the same arrangement NVIDIA uses for the GeForce NOW client itself, which is not on Flathub either.
+
+### Flatpak bundle — offline, and needs no remote
+
+Works on every distribution, from a single file, with nothing configured.
 
 ```bash
 flatpak install --user ./GfnLauncher-<version>.flatpak
@@ -51,9 +67,7 @@ flatpak run io.github.robertotucci.GfnLauncher
 
 A bundle installed by hand has nothing to update from, so this one does not update itself: each release is a new bundle to download. The launcher still notices a new version and tells you, and is honest about not being able to install it for you — it reads the deployed commit either side of an update rather than trusting `flatpak update`, which succeeds and changes nothing when there is no remote behind it.
 
-This launcher is **not on Flathub**, and there is no build to install from there.
-
-### AppImage — if you would rather not use Flatpak at all, and the one build that updates itself
+### AppImage — if you would rather not use Flatpak at all
 
 ```bash
 chmod +x GFN-Launcher-<version>.AppImage

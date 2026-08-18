@@ -1,0 +1,13 @@
+# Template for the file `flatpak remote-add` reads. @GPGKEY@ is replaced with
+# the base64 of the signing key's public half by
+# scripts/publish-flatpak-remote.sh, which is also what publishes the result.
+# A .flatpakrepo is a GKeyFile, so these lines are comments and survive
+# harmlessly into the published copy.
+[Flatpak Repo]
+Title=GFN Launcher
+Url=https://robertotucci.github.io/gfnlauncher/
+Homepage=https://github.com/robertotucci/gfnlauncher
+Comment=A couch launcher for NVIDIA GeForce NOW
+Description=Fullscreen, gamepad-only, and built for a television rather than a desktop. Hands games off to the GeForce NOW client you already have installed.
+Icon=https://raw.githubusercontent.com/robertotucci/gfnlauncher/main/resources/icons/256x256.png
+GPGKey=@GPGKEY@

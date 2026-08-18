@@ -53,6 +53,33 @@ The launcher's own updater reads `/releases/latest` and acts on what it finds th
 - **Every asset needs its sha256 digest**, which GitHub attaches on its own. The AppImage path refuses to install an artefact whose digest is missing or malformed rather than trusting the bytes, so a release published some other way — by hand, or through a tool that strips it — reaches AppImage users as "install it yourself" rather than as an update.
 - **The tag must parse as semver**, and pre-releases must actually be marked as such. `/releases/latest` excludes them, and `isNewerVersion` refuses to offer one over the stable version it precedes — but only if the flag is set on the release.
 
+## The remote
+
+`flatpak update` needs a repository to update from, and this project publishes its own: an OSTree repository on GitHub Pages at `https://robertotucci.github.io/gfnlauncher/`, served out of the `gh-pages` branch. The `remote` job in `Release` builds it — `scripts/publish-flatpak-remote.sh` folds the new build into whatever is already published, signs it, and generates the deltas that make an update cost megabytes rather than the whole application.
+
+It runs *before* the release is published, and the release is blocked if it fails. The other order looks harmless and is not: the launcher's update notice reads `/releases/latest` and then runs `flatpak update`, so a release that exists on GitHub before it exists in the remote tells every Flatpak user there is an update and then fails to find one.
+
+Three things had to be set up once, and are recorded here because none of them lives in the repository:
+
+1. **A signing key**, generated with no passphrase because it signs unattended in CI. RSA rather than an elliptic curve: this key is verified by whatever GnuPG is on a stranger's machine, and RSA is the one every version of it understands.
+
+   ```bash
+   gpg --quick-generate-key "GFN Launcher signing key <you@example.com>" rsa4096 sign never
+   gpg --armor --export-secret-keys <key-id>   # → the secret below, never into this repository
+   ```
+
+2. **The secret `FLATPAK_GPG_PRIVATE_KEY`**, holding that armoured private key. The workflow derives the key id from it rather than taking a second secret. The public half needs no home of its own: the script exports it into the `.flatpakrepo` on every publish, from `flatpak/gfnlauncher.flatpakrepo.in`.
+
+3. **Pages**, serving from the `gh-pages` branch at the root — but only after that branch exists, which the first successful `remote` job is what creates. So the order the first time is: add the secret, run `Release` by hand against an existing tag, point Pages at `gh-pages`, then check the result from the outside:
+
+   ```bash
+   flatpak remote-add --if-not-exists --user gfnlauncher \
+     https://robertotucci.github.io/gfnlauncher/gfnlauncher.flatpakrepo
+   flatpak install --user gfnlauncher io.github.robertotucci.GfnLauncher
+   ```
+
+Rotating the key means republishing: every client that has the remote pins the old one, and `flatpak update` fails on a signature it does not recognise rather than silently accepting the new one. That is the property worth having, and the reason the key signs this repository and nothing else.
+
 ## Flathub
 
 **There is no Flathub build, and the submission was rejected.** [flathub/flathub#9809](https://github.com/flathub/flathub/pull/9809) was closed on 2026-08-18 under Flathub's [generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy), which bars a submission whose pull request, description or code is AI-generated or AI-assisted — this repository's commit history says it is. The rest of this section is accurate and is kept for the day that is resolved; none of it describes anything that exists today.

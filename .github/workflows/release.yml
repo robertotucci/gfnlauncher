@@ -136,9 +136,93 @@ jobs:
           path: '*.flatpak'
           if-no-files-found: error
 
+      # Tarred rather than uploaded as a directory: an archive repository is
+      # tens of thousands of small objects, and the upload action costs one
+      # request each.
+      - name: Archive the OSTree repository
+        run: tar -cf ostree-repo.tar repo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ostree-repo
+          path: ostree-repo.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  remote:
+    name: Flatpak remote
+    needs: flatpak
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install flatpak
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ostree-repo
+
+      - run: tar -xf ostree-repo.tar
+
+      # No passphrase on this key by design: it signs in CI, unattended, and a
+      # passphrase in a second secret beside it protects nothing. It signs this
+      # repository and nothing else, and is revocable on its own.
+      - name: Import the signing key
+        env:
+          PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::FLATPAK_GPG_PRIVATE_KEY is not set — see RELEASING.md"
+            exit 1
+          fi
+          printf '%s' "$PRIVATE_KEY" | gpg --batch --quiet --import
+          key="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          echo "GPG_KEY_ID=$key" >> "$GITHUB_ENV"
+
+      # The published branch is the previous state of the repository, and the
+      # new commit is written on top of it so that an installed copy can update
+      # by delta. Absent on the very first release, which is not an error.
+      - name: Fetch the published repository
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" pages
+            rm -rf pages/.git
+          else
+            echo "No gh-pages branch yet; starting a new repository"
+            mkdir pages
+          fi
+
+      - name: Publish
+        run: ./scripts/publish-flatpak-remote.sh repo pages
+
+      # A fresh orphan commit every time, force-pushed. The OSTree repository
+      # keeps its own history inside these files, so keeping a git history of
+      # them as well would store every release's ninety megabytes for ever and
+      # walk the repository into GitHub's size limits within a year.
+      - name: Push
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          cd pages
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish $version"
+          git push -q --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+
   publish:
     name: Publish release
-    needs: [native, flatpak]
+    needs: [native, remote]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -166,7 +250,15 @@ jobs:
             echo
             echo '## Install'
             echo
-            echo '**Flatpak — recommended, any distribution:**'
+            echo '**Recommended — adds the remote, so this and every later version update themselves:**'
+            echo
+            echo '```bash'
+            echo 'flatpak remote-add --if-not-exists --user gfnlauncher \'
+            echo '  https://robertotucci.github.io/gfnlauncher/gfnlauncher.flatpakrepo'
+            echo 'flatpak install --user gfnlauncher io.github.robertotucci.GfnLauncher'
+            echo '```'
+            echo
+            echo '**Or the bundle below, which needs no remote and does not update itself:**'
             echo
             echo '```bash'
             echo "flatpak install --user ./GfnLauncher-${version}.flatpak"
