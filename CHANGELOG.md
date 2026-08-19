@@ -8,6 +8,22 @@ Release notes on GitHub and the AppStream `<releases>` block are both generated 
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-19
+
+### Added
+
+- **The pad can be a mouse and a keyboard.** Hold **L3 + R3** and a cursor appears: the left stick moves it, the right stick scrolls, **A** clicks, **B** right-clicks, **X** opens an on-screen keyboard with every character on it, and **☰** puts it away. This closes the gap the launcher has admitted to since the first release — NVIDIA's sign-in page is not gamepad-navigable, so linking an account from a sofa was not possible without finding a keyboard. It now is, with nothing to switch on and no permission to grant.
+- **Optionally, that cursor works outside the launcher too** — on the desktop, and inside a running game, where a Steam licence prompt or an updater that wants a click otherwise leaves a session stuck. Off by default under **Settings → Pointer**, because the first use asks your desktop for permission in a dialog of its own; after that it is remembered. While it is up in a game the pad still reaches the game as well, which is why the chord is a deliberate half-second hold rather than a click.
+
+### Fixed
+
+- **A gamepad switched on before the launcher starts is recognised straight away.** Turning the pad on while the machine booted left it dead in the launcher until it was switched off and on again. The Flatpak could open the pad's device node but could not read the system database that says the node *is* a pad, so only a pad connected after the launcher was already running was ever seen. It now asks for that database — and if the permission is taken away, the log says so and gives the one command that restores it, instead of leaving a launcher that ignores the controller for no visible reason.
+- **A stray mouse click can no longer reach the launcher hiding behind a game.** Input from the pad has been blocked in that situation since 0.1.1, but a pointer never was — a click landing on the grid behind a stream could open a panel, or press Play and close the game that was running.
+
+### Changed
+
+- **The keyboard shortcuts stop working while something else has the screen**, matching what the pad already did. Previously they were left alone on the grounds that an unfocused window receives no keystrokes at all — which stopped being true now that the launcher has an on-screen keyboard of its own.
+
 ## [0.1.1] - 2026-08-19
 
 ### Fixed
@@ -50,5 +66,6 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
+[0.1.2]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.2
 [0.1.1]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.1
 [0.1.0]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0

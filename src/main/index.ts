@@ -7,7 +7,9 @@ import { disarmHandback } from './gfn/handback'
 import { FLATPAK_ID, IS_SANDBOXED } from './host'
 import { registerIpcHandlers } from './ipc'
 import { initLogging, writeLogLine } from './log'
-import { getSettings } from './settings'
+import { reportPadAccess } from './padAccess'
+import { armPointerMode, disarmPointerMode } from './pointer'
+import { getSettings, updateSettings } from './settings'
 import { attachScreenReporting } from './screen'
 import { applyUiScale } from './uiScale'
 import { holdFullscreen, logFocusChanges, restoreLauncher } from './window'
@@ -79,6 +81,24 @@ function start(): void {
     // exists by the time it has something to say.
     armClientWatch(() => mainWindow)
 
+    // The pad reader behind the desktop cursor. Armed here for the same reason
+    // as the client watch: it has to be listening before the window exists,
+    // because the case it serves most is a launcher that is *not* the thing on
+    // screen — minimised behind a desktop, or behind a running game.
+    const settings = await getSettings()
+    armPointerMode(
+      () => mainWindow,
+      settings,
+      (pointerRestoreToken) => {
+        // Fire and forget: the token only saves the user a permission dialog
+        // next time, and a failed write must not take down a session that is
+        // already granted and working.
+        void updateSettings({ pointerRestoreToken }).catch((error: unknown) => {
+          console.warn('Could not persist the desktop-pointer permission token:', error)
+        })
+      }
+    )
+
     await createWindow()
 
     app.on('activate', () => {
@@ -95,6 +115,11 @@ function start(): void {
     console.info('Launcher quitting.')
     disarmHandback()
     disarmClientWatch()
+    // Holds open joystick devices and, while a cursor is up, a portal session
+    // with a virtual pointer the compositor is keeping alive on our behalf.
+    // Both have to go back explicitly; the second one especially, because a
+    // stray virtual pointer outliving the launcher is not our bug to notice.
+    disarmPointerMode()
   })
 
   app.on('window-all-closed', () => {
@@ -135,6 +160,12 @@ function announceStartup(): void {
       `node=${process.versions.node}`
   )
   console.info(`Logging to ${LOG_PATH}`)
+
+  // Beside them, and only when there is something to say: a sandbox that cannot
+  // read the udev database answers no pad that was connected before it started,
+  // and the symptom — a launcher that ignores the controller — looks like every
+  // other way this application can fail. See `padAccess.ts`.
+  reportPadAccess()
 }
 
 /**

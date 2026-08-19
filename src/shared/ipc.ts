@@ -73,6 +73,52 @@ export const IPC = {
   appOpenDonation: 'app:openDonation',
   appPadActivity: 'app:padActivity',
   /**
+   * Pointer mode, and the only channel here that is **not** on the bridge.
+   *
+   * It runs preload → main from `src/preload/pointer.ts`, which is mounted on
+   * the two windows that render somebody else's page — the sign-in window and
+   * the web player. Those windows get no `contextBridge` and never will, so
+   * this cannot appear in `preload/index.ts` beside the rest: the whole point
+   * of that preload is that it exposes nothing, and the page it shares a
+   * process with can no more reach this channel than it can reach `ipcRenderer`.
+   *
+   * `isPointerCommand` in `@shared/pointer` validates every payload on the main
+   * side, which matters more here than on the bridge. What arrives is replayed
+   * as *trusted* input into the very page that hosts the sender.
+   */
+  pointerEvent: 'pointer:event',
+  /**
+   * The answer half of `pointer:event`, main → the pointer preload.
+   *
+   * It exists because a document is not a session. Signing in walks through
+   * three or four navigations — the mall, NVIDIA's login, the password step —
+   * and each one re-executes the preload with a fresh, empty state. Without
+   * this the cursor would vanish at every step and the user would have to hold
+   * the chord again to get through a single form.
+   *
+   * Main remembers the mode per window and replays it into each new document.
+   * It is also how main can *end* the mode, which is the half that matters when
+   * something goes wrong.
+   */
+  pointerRestore: 'pointer:restore',
+  /**
+   * Main → renderer: the desktop cursor is up.
+   *
+   * **The fifth of the main → renderer channels**, and it has to pass the test
+   * the other four set out below: the renderer cannot ask, because it has no
+   * way of knowing there is anything to ask about. It passes. The mode is armed
+   * by a chord read off `/dev/input/js*` in main, which the renderer cannot see
+   * at all — that reader exists precisely because the renderer is asleep or
+   * suspended in the two situations this serves.
+   *
+   * It is needed because with a cursor over the launcher the left stick must
+   * move the cursor and **not** also walk the grid underneath it. The renderer
+   * suppresses its own intents while this is true. That is a mode check before
+   * `emit` and deliberately *not* a change to `shouldAcceptInput`, which stays
+   * exactly as it is.
+   */
+  pointerMode: 'pointer:mode',
+  /**
    * Where the log file is, and what this build is.
    *
    * The third channel on this boundary with no payload, and for the same reason

@@ -22,10 +22,9 @@
       "@shared/*": ["src/shared/*"]
     }
   },
-  "include": [
-    "src/main/**/*",
-    "src/preload/**/*",
-    "src/shared/**/*",
-    "electron.vite.config.ts"
-  ]
+  // The preloads moved to tsconfig.preload.json when one of them grew a DOM.
+  // Keeping them here would have meant adding "DOM" to the `lib` above, and
+  // that lets a `document` reference into main, where it compiles clean and
+  // throws at runtime.
+  "include": ["src/main/**/*", "src/shared/**/*", "electron.vite.config.ts"]
 }

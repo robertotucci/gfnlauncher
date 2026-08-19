@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { LaunchRequest, LaunchResult } from '@shared/types'
+import { POINTER_PRELOAD, registerPointerTarget } from '../pointer'
 import { getAuthSession } from './partition'
 
 /**
@@ -113,13 +114,18 @@ export async function launchViaWeb(
       title: 'GeForce NOW',
       webPreferences: {
         session: ses,
-        // Third-party page: no bridge, no preload, no Node. Same terms the
-        // login window renders under.
+        // Third-party page: no bridge, no Node. Same terms the login window
+        // renders under, including the pointer preload — the mall has menus a
+        // pad cannot reach either, and a game that opens a launcher of its own
+        // needs somewhere to click.
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true
+        sandbox: true,
+        preload: POINTER_PRELOAD
       }
     })
+
+    registerPointerTarget(window, 'the web player')
 
     // Not `webPreferences.userAgent`, which is not a real option and is silently
     // dropped — gfn-electron passes it there too and gets away with it only

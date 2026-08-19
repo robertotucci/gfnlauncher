@@ -115,6 +115,19 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.2" date="2026-08-19">
+      <description>
+        <p>The pad can now be a mouse and a keyboard, and a controller switched on before the launcher is recognised.</p>
+        <ul>
+          <li>Hold L3 + R3 and the pad becomes a mouse: the left stick moves a cursor, the right stick scrolls, A clicks and X opens an on-screen keyboard — so signing in to NVIDIA, which is not gamepad-navigable, no longer needs a keyboard</li>
+          <li>Optionally the same cursor works on the desktop and inside a running game, for a licence prompt or an updater that wants a click; off by default under Settings, and it asks the desktop for permission once</li>
+          <li>A gamepad switched on before the launcher starts is recognised straight away, instead of staying dead until it is unplugged and plugged back in</li>
+          <li>A stray mouse click can no longer reach the launcher sitting behind a running game</li>
+          <li>The keyboard shortcuts stop working while something else has the screen, matching what the pad already did</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.2</url>
+    </release>
     <release version="0.1.1" date="2026-08-19">
       <description>
         <p>Fixes for input during a game, library sync, and keeping up with the GeForce NOW client.</p>

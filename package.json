@@ -33,7 +33,7 @@
     "build": "npm run typecheck && electron-vite build",
     "build:linux": "npm run build && electron-builder --linux --publish never",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -45,6 +45,7 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@homebridge/dbus-native": "^0.7.9",
     "radix-ui": "^1.6.7"
   },
   "devDependencies": {

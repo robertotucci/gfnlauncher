@@ -107,6 +107,14 @@ const api: LauncherApi = {
       return () => {
         ipcRenderer.off(IPC.appScreen, forward)
       }
+    },
+    /** The fifth, and the last one this bridge should grow. Same shape. */
+    onPointerMode: (listener: (active: boolean) => void) => {
+      const forward = (_event: unknown, active: boolean): void => listener(active)
+      ipcRenderer.on(IPC.pointerMode, forward)
+      return () => {
+        ipcRenderer.off(IPC.pointerMode, forward)
+      }
     }
   }
 }

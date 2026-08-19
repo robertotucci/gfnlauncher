@@ -41,6 +41,25 @@ finish-args:
   # be tighter but is newer than the flatpak on some target systems, and
   # --device=all is what covers both on every version.
   - --device=all
+  # The udev database, read-only, and it is the other half of the line above:
+  # without it a pad that was already switched on when the launcher started is
+  # invisible until it is unplugged and plugged back in.
+  #
+  # Chromium does not decide what is a gamepad by opening the device node. Its
+  # Linux data fetcher asks libudev for `ID_INPUT_JOYSTICK`, and reads
+  # `ID_VENDOR_ID` and `ID_BUS` for the pad id the footer legend is drawn from —
+  # all three are written by udevd into /run/udev/data, and none of them is in
+  # /sys. Flatpak gives the sandbox its own /run, so that directory is simply
+  # absent: enumeration at startup then finds every input device and no
+  # properties on any of them. Measured inside this sandbox against libudev
+  # directly — 38 input devices, 7 carrying an `ID_INPUT_*` property on the host,
+  # 0 in here — and the Electron binary contains all three property names.
+  #
+  # Hotplug worked throughout, which is what made this read as a pad fault
+  # rather than a permission: a udev *monitor* event arrives over netlink
+  # carrying the whole property set already computed, so switching the pad off
+  # and on again fixed it every time and starting the launcher never did.
+  - --filesystem=/run/udev:ro
 
   # ── Network ─────────────────────────────────────────────────────────────────
   # The catalogue, NVIDIA's sign-in page, and the status board.

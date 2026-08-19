@@ -593,6 +593,25 @@ export function SettingsScreen({
           />
         </Section>
 
+        <Section title="Pointer">
+          <ToggleRow
+            id="setting:pointerDesktop"
+            scope={scope}
+            label="Cursor outside the launcher"
+            // Says what it costs, because the cost arrives later and as a
+            // system dialog nobody was expecting. It also says where the
+            // feature works *without* the setting, so switching it off does not
+            // read as "no cursor anywhere".
+            description={
+              'Lets L3 + R3 raise a mouse cursor on the desktop and inside a running game — ' +
+              'for a Steam prompt a pad cannot answer. Asks the desktop for permission once. ' +
+              'Sign-in and the web player always have a cursor, with or without this.'
+            }
+            value={settings.pointerDesktop}
+            onConfirm={() => onUpdate({ pointerDesktop: !settings.pointerDesktop })}
+          />
+        </Section>
+
         <Section title="Catalog">
           <ActionRow
             id="setting:refreshCatalog"

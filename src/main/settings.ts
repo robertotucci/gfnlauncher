@@ -42,7 +42,19 @@ function sanitise(raw: unknown): Settings {
     // hand-editable, and a megabyte in one field would be carried into memory
     // and back out to disk on every write.
     dismissedUpdate:
-      typeof input.dismissedUpdate === 'string' ? input.dismissedUpdate.slice(0, 64) : null
+      typeof input.dismissedUpdate === 'string' ? input.dismissedUpdate.slice(0, 64) : null,
+    pointerDesktop:
+      typeof input.pointerDesktop === 'boolean'
+        ? input.pointerDesktop
+        : DEFAULT_SETTINGS.pointerDesktop,
+    // Bounded for the same reason as `dismissedUpdate`, and a little more
+    // generously: the portal decides this string's shape, not us, and it is
+    // handed straight back to the portal. Anything longer than this is not a
+    // token, it is a hand-edited file.
+    pointerRestoreToken:
+      typeof input.pointerRestoreToken === 'string'
+        ? input.pointerRestoreToken.slice(0, 256)
+        : null
   }
 }
 

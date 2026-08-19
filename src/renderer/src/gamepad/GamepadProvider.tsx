@@ -33,6 +33,17 @@ interface GamepadContextValue {
    * footer shows this one because it is the half a user can act on.
    */
   windowFocused: boolean
+  /**
+   * `shouldAcceptInput` itself — whether the launcher may act on input at all.
+   *
+   * Exposed because the pad is not the only way in. A real mouse click, and now
+   * a synthetic one from pointer mode's cursor, reach the DOM without passing
+   * anything in this file, so `App` uses this to take the whole tree out of the
+   * pointer's reach while somebody else has the screen. Fails open with the
+   * rest: a focused launcher is always accepted, so this can never make a
+   * window the user is looking at unclickable.
+   */
+  inputAccepted: boolean
   /** Glyph set for the device in hand: the pad's family, or the keyboard. */
   scheme: InputScheme
 }
@@ -54,6 +65,11 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
   const handlers = useRef(new Set<IntentHandler>())
   const [connected, setConnected] = useState(false)
   const [windowFocused, setWindowFocused] = useState(() => document.hasFocus())
+  /**
+   * Starts true, like `SCREEN_OURS` does, and for the same reason: a push that
+   * never arrives has to cost correctness rather than control.
+   */
+  const [inputAccepted, setInputAccepted] = useState(true)
   const [scheme, setScheme] = useState<InputScheme>('keyboard')
   /**
    * Everything `shouldAcceptInput` needs, in a ref rather than in state.
@@ -75,6 +91,15 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
    * who is still typing; 'key' sticks until the pad is actually touched.
    */
   const lastSource = useRef<'pad' | 'key' | null>(null)
+  /**
+   * True while main is driving a desktop cursor with the same pad.
+   *
+   * In a ref beside the gate and for the same reason: the poll loop must not be
+   * rebuilt when it changes, or the edge baseline `stepPad` carries would reset
+   * — which is the thing that stops the button you left a mode with from firing
+   * as you come back to the grid.
+   */
+  const pointerMode = useRef(false)
 
   /**
    * Delivers one intent to every subscriber, and lets none of them stop the
@@ -204,7 +229,23 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
         setWindowFocused(focused)
       }
 
-      const accepted = shouldAcceptInput(gate.current)
+      const allowed = shouldAcceptInput(gate.current)
+
+      /**
+       * The pad gate, which is the screen gate plus one more thing.
+       *
+       * While main is driving a desktop cursor with this same pad, the stick
+       * must move the cursor and not also walk the grid under it. Folding it in
+       * here rather than skipping `stepPad` is deliberate: the fold's adoption
+       * rule then covers the exit for free, so the ☰ that ended pointer mode is
+       * not read as a fresh press by the grid the instant it comes back.
+       */
+      const accepted = allowed && !pointerMode.current
+
+      // Mirrored into state on a transition, never per frame. `App` reads it to
+      // decide whether the DOM may be clicked — and that is the *screen* gate,
+      // not this one: with a cursor over the launcher, clicking is the point.
+      setInputAccepted((current) => (current === allowed ? current : allowed))
 
       if (accepted !== announced) {
         announced = accepted
@@ -218,7 +259,8 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
           suspendedFrames = 0
           const { focused, minimised, handedOff } = gate.current
           console.info(
-            `Pad input suspended: focused=${focused} minimised=${minimised} handedOff=${handedOff}`
+            `Pad input suspended: focused=${focused} minimised=${minimised} ` +
+              `handedOff=${handedOff} pointerMode=${pointerMode.current}`
           )
         }
       }
@@ -246,13 +288,25 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
 
   // Keyboard mirror.
   //
-  // Deliberately not gated. A window that is not focused receives no `keydown`
-  // at all, so the operating system has already applied a stricter rule than
-  // `shouldAcceptInput` would — which is the whole reason this bug was a pad
-  // bug and never a keyboard one, and the whole reason `npm run dev` could not
-  // reproduce it.
+  // **This used to be deliberately ungated, and the argument for that is now
+  // false.** It ran: a window that is not focused receives no `keydown` at all,
+  // so the operating system has already applied a stricter rule than
+  // `shouldAcceptInput` would — which is why the original bug was a pad bug and
+  // never a keyboard one, and why `npm run dev` could not reproduce it.
+  //
+  // That holds for a keyboard somebody is typing on. It stopped holding the
+  // moment this launcher grew one of its own: pointer mode's on-screen keyboard
+  // injects real keycodes through the compositor, and on Wayland the compositor
+  // may perfectly well have left the focus on the launcher while a stream is in
+  // front of it. A `/` typed into a remote Steam field would then open our
+  // search, and `Enter` would confirm whatever the cursor was sitting on.
+  //
+  // So it is gated like everything else, and the gate still fails open — a
+  // focused launcher accepts unconditionally.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (!shouldAcceptInput(gate.current)) return
+
       // Let text fields keep their own keys.
       const target = event.target as HTMLElement | null
       if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') {
@@ -290,9 +344,21 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
     })
   }, [])
 
+  /**
+   * The other thing only main can answer: whether it is driving a cursor with
+   * this pad. Optional for the same reason as the call above — a preload that
+   * failed to load leaves the permissive default, which here is "the grid still
+   * answers the pad".
+   */
+  useEffect(() => {
+    return window.launcher?.app.onPointerMode((active) => {
+      pointerMode.current = active
+    })
+  }, [])
+
   const value = useMemo<GamepadContextValue>(
-    () => ({ subscribe, connected, windowFocused, scheme }),
-    [subscribe, connected, windowFocused, scheme]
+    () => ({ subscribe, connected, windowFocused, inputAccepted, scheme }),
+    [subscribe, connected, windowFocused, inputAccepted, scheme]
   )
 
   return <GamepadContext.Provider value={value}>{children}</GamepadContext.Provider>

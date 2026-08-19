@@ -45,6 +45,7 @@ import {
   launchFailureReason,
   type LaunchNoticeState
 } from '@/components/LaunchNotice'
+import { cn } from '@/lib/utils'
 
 const ROOT_SCOPE = 'root'
 
@@ -207,7 +208,7 @@ export function App(): ReactNode {
   /** Where the log file is, for the Settings nameplate. Null until it answers. */
   const [logPath, setLogPath] = useState<string | null>(null)
 
-  const { connected, windowFocused, scheme } = useGamepad()
+  const { connected, windowFocused, inputAccepted, scheme } = useGamepad()
   const { focusedId, focus, move, confirm, setActiveScope } = useSpatialFocus()
 
   // A joystick does not reset a compositor's idle timer, so browsing with the
@@ -1396,7 +1397,26 @@ export function App(): ReactNode {
                   ]
 
   return (
-    <div className="bg-background flex h-full flex-col">
+    <div
+      className={cn(
+        'bg-background flex h-full flex-col',
+        // The other half of `shouldAcceptInput`, and it closes a hole that
+        // predates pointer mode.
+        //
+        // The pad has been gated since the day a pause menu behind a stream
+        // could reach `gfn:launch` and kill the client it was streaming from.
+        // The *pointer* never was. A real mouse click on the launcher sitting
+        // behind a game still lands on a tile, and pointer mode adds a second
+        // way for one to get there: the portal cursor injects a genuine click
+        // at the compositor, so a cursor that wanders off the edge of a
+        // non-fullscreen GeForce NOW window arrives here.
+        //
+        // Same gate, same failure direction: a focused launcher is accepted
+        // unconditionally, so this can never make a window somebody is looking
+        // at unclickable.
+        !inputAccepted && 'pointer-events-none'
+      )}
+    >
       {/* No top bar: above the footer the screen belongs to cover art. */}
       <div className="relative flex min-h-0 flex-1">
         <NavRail view={view} scope={ROOT_SCOPE} onSelect={setView} onPower={openPower} />

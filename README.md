@@ -116,6 +116,30 @@ Search is driven by an on-screen alphabetical keyboard — A–Z in a grid, beca
 
 The footer legend always describes the controller in your hands. Unplug the pad and it switches to keycaps; plug in a PlayStation pad and A becomes ✕.
 
+### Pointer mode — the pad as a mouse
+
+Some things are not a grid. **Hold L3 + R3** — both stick clicks, for about half a second — and the pad becomes a mouse. Hold them again, or press ☰, to put it away.
+
+| Input | While the cursor is up |
+| --- | --- |
+| Left stick | Move the cursor |
+| Right stick | Scroll |
+| **A** | Left click |
+| **B** | Right click |
+| **X** | On-screen keyboard |
+| **☰** | Put the cursor away |
+
+With the keyboard open the stick picks a key and **A** types it; **B** closes it. It is alphabetical like the search one, and it has every character on it, because a password with a backslash in it is not one you can leave out.
+
+This works out of the box in the two places the launcher itself puts a web page in front of you: **signing in to NVIDIA**, which is the one screen a pad genuinely cannot navigate and the reason an account could not be linked from a sofa at all, and the **web player**.
+
+**Outside the launcher it is off by default** — see *Cursor outside the launcher* under Settings → Pointer. Switched on, the same hold gives you a real cursor on the desktop and, more usefully, **inside a running game**: a Steam licence prompt or an updater that wants a click is otherwise a stuck session. It asks your desktop for permission the first time, in a system dialog that needs a real mouse or keyboard to answer; after that it is remembered and silent.
+
+Two things to know before you use it in a game:
+
+- **The pad still reaches the game.** GeForce NOW reads the controller itself and forwards it, and the launcher does not take it away — doing so would need to seize the device, and a bug in putting it back would leave you with no controller at all. So while the cursor is up the stick moves it *and* whatever the game does with a stick. In the situation this is for — a dialog on top of a game that is not listening — that costs nothing. It is why the chord is a deliberate hold rather than a click.
+- **The on-screen keyboard is launcher-windows only.** Drawing one over another program's fullscreen window needs a floating surface Wayland will not let an application place, and one that took the focus would type into itself. The cursor works everywhere; typing works where the launcher owns the window.
+
 ## What is in it
 
 - **Grid** of the whole GeForce NOW catalog (~5 900 titles), with genre filtering and an RTX filter
@@ -124,16 +148,17 @@ The footer legend always describes the controller in your hands. Unplug the pad 
 - **Search**, server-side, driven from the on-screen keyboard
 - **Details panel** — description, screenshots, supported controls, subscription tier, and store chips for picking which store's edition launches
 - **Status** — GeForce NOW service health, opening with *your* datacenter rather than a list of 76. Read from the client's own routing configuration on this disk, so it needs no account and works offline
-- **Settings** — sign-in, library sync, accent colour, interface scale (75–175%), fullscreen, autostart, launch mode
+- **Pointer mode** — hold L3 + R3 and the pad becomes a mouse and a keyboard, for the screens that are not a grid
+- **Settings** — sign-in, library sync, accent colour, interface scale (75–175%), fullscreen, autostart, launch mode, pointer mode
 - **Power** — back to desktop, sleep, restart, turn off. The launcher is the last thing on screen before the TV goes off
 
 ## Signing in
 
 Open **Settings** (Y) and choose **Sign in to GeForce NOW**. NVIDIA's own sign-in page opens in a window the launcher owns; log in as you normally would. The session persists, so this is a one-time step.
 
-Two honest caveats:
+Two things worth knowing:
 
-- **Sign-in needs a mouse and keyboard.** NVIDIA's login page is not gamepad-navigable. Everything after it is, and if there is no keyboard near the television, [a pointer driven from the pad](#a-pointer-and-a-keyboard-on-the-pad--antimicrox) stands in for one.
+- **NVIDIA's login page is not gamepad-navigable**, so the launcher brings its own cursor: hold **L3 + R3** in that window and the pad becomes a mouse, with **X** for an on-screen keyboard to type the address and the password. See [pointer mode](#pointer-mode--the-pad-as-a-mouse). No setting to switch on, and no permission — it works there out of the box.
 - The launcher reads the session off that window and keeps the bearer token in memory only. It is never written to disk.
 
 ## Sandbox permissions, and why
@@ -148,6 +173,7 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 | --- | --- |
 | `--talk-name=org.freedesktop.Flatpak` | Running commands on the host: `flatpak` to launch the GeForce NOW client with a deep link and to stop a running one first, `systemctl` for the power menu, and writing the autostart entry into your real `~/.config/autostart` |
 | `--device=all` | Reading the gamepad, and the GPU |
+| `--filesystem=/run/udev:ro` | Recognising a pad that was already switched on before the launcher started. The line above opens the device node; this is the udev database Chromium reads to know that the node *is* a gamepad. Without it, a pad is only seen if it is connected — or switched off and on again — after the launcher is running |
 | `--talk-name=org.gnome.SessionManager`, `…PowerManagement`, `…ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one, rather than the whole session bus for one call |
 | `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen — and noticing when a game has finished, so the launcher can close the client and take the screen back |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
@@ -159,6 +185,8 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 
 It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three names under it are ordinary session services being asked a question; none of them can run anything.
 
+**Nothing in that list is what gives the cursor the desktop.** [Pointer mode](#pointer-mode--the-pad-as-a-mouse) outside the launcher's own windows goes through `org.freedesktop.portal.RemoteDesktop`, which is a portal — Flatpak permits every application to talk to the portals, and a portal is the sanctioned way out precisely because *you* answer for it, once, in a dialog the launcher cannot draw or dismiss. That is also why it needed no new line above, and why the alternative was rejected: a virtual device through `/dev/uinput` would have wanted `--device=all` to mean rather more than reading a pad, plus a udev rule installed as root. Revoke it in your desktop's remote-control or screen-sharing settings and the cursor stops at the launcher's own windows, where it needs nothing.
+
 Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the host one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed. Revoke the three screen ones and nothing will say so — a blocked Inhibit call still looks like it succeeded from inside the sandbox, and all you see is the screen going dark while you browse, which is what it did before it asked.
 
 ## Waking the machine with the pad
@@ -169,9 +197,13 @@ Not something the launcher can do — `/sys/bus/usb/devices/*/power/wakeup` is r
 
 None of this is required, and none of it is bundled. The launcher drives whatever pad the kernel already exposes, and on a current kernel that is every pad worth naming. These are the places a television setup runs out of road, and the smallest thing that fills each.
 
-### A pointer and a keyboard on the pad — AntiMicroX
+### A full keyboard on the pad, everywhere — AntiMicroX
 
-This closes the two gaps the launcher admits to. NVIDIA's sign-in page is not gamepad-navigable, and the desktop you land on after **Back to desktop** cannot be left with a pad either — a minimised launcher stops acting on input, and no pad can un-iconify a window in the first place. The catalogue adds a third: 1 835 of its titles are keyboard-and-mouse only. [AntiMicroX](https://github.com/AntiMicroX/antimicrox) maps sticks to a pointer and buttons to keys through `/dev/uinput`, which is kernel-side — so the launcher, the GeForce NOW client and the stream all see an ordinary mouse and keyboard, sandbox or no sandbox.
+[Pointer mode](#pointer-mode--the-pad-as-a-mouse) now covers what this section used to exist for: the sign-in page, the web player, the desktop after **Back to desktop**, and clicking a prompt inside a running game. Two things it deliberately does not cover, and this is what fills them.
+
+**Typing outside the launcher's own windows** — the on-screen keyboard cannot be drawn over another program's fullscreen surface on Wayland, so entering a key into a game's own launcher is still out of reach. And **playing the 1 835 catalogue titles that are keyboard-and-mouse only**, which is a different job altogether: a mapping you want held down mid-game, not a mode you toggle.
+
+[AntiMicroX](https://github.com/AntiMicroX/antimicrox) maps sticks to a pointer and buttons to keys through `/dev/uinput`, which is kernel-side — so the launcher, the GeForce NOW client and the stream all see an ordinary mouse and keyboard, sandbox or no sandbox. That is also the thing the launcher will not do for itself: `/dev/uinput` needs a udev rule installed as root, which is not something to ask of a machine whose whole point is that it is driven from a sofa.
 
 ```bash
 flatpak install flathub io.github.antimicrox.antimicrox

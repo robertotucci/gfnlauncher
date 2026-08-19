@@ -83,6 +83,8 @@ A opening the panel means the handoff costs two presses, both on A: `openDetails
 
 Glyphs come from Lucide where the button really is a shape (PlayStation's `X` / `Circle` / `Square` / `Triangle`, and `Menu` for ☰ on both pads) and stay as text where it is a character (Xbox's A/B/X/Y, `LB`/`RB`, keycaps). They were Unicode literals once; a face font with no `△` in it turns the footer into tofu, and the launcher has to render correctly offline on whatever it shipped with.
 
+**None of it runs unless Chromium can see the pad, and inside the Flatpak that took a second permission.** `--device=all` opens /dev/input; it is not what makes a device a gamepad. Chromium's Linux fetcher asks libudev for `ID_INPUT_JOYSTICK` before it will consider an input device at all, and reads `ID_VENDOR_ID` and `ID_BUS` for the id `scheme.ts` picks a glyph family from — properties udevd keeps in **/run/udev/data**, not in /sys and not on the node. Flatpak gives the sandbox its own /run, so startup enumeration found every input device and no properties on any of them, and a pad switched on before the launcher was invisible. A pad connected *afterwards* was fine, because a udev monitor event arrives over netlink with the properties already computed — which is why the symptom was "switch the pad off and on again and it works", and why it looked like hardware. `--filesystem=/run/udev:ro` is the fix; `reportPadAccess` in `src/main/padAccess.ts` writes a line naming the `flatpak override` if that permission is ever revoked, since the symptom is a launcher that ignores the controller and nothing on screen can say why.
+
 ### `src/renderer/src/focus/SpatialFocus.tsx` — where focus goes
 
 A tile grid needs geometry, not DOM order: pressing down has to land in the same column, which document order cannot express. `scoreCandidate` (pure, unit-tested) rejects candidates that are not in the direction of travel, then ranks the rest by distance plus an orthogonal-drift penalty.
@@ -122,6 +124,54 @@ Consequences worth knowing before changing UI code:
 **The other half of the fix is the boundary, and it is in `stepPad`.** Suppressing input is not enough on its own: the button that quit the game is still down when the launcher comes back, and a naive edge detector reads that as a fresh press. `src/renderer/src/gamepad/pad.ts` is a pure reducer over one frame — the same bargain `stepHandback` makes, and the only way any of this is testable in a suite with no DOM — and the first frame after a suspension is *adopted* rather than compared. A direction held across the boundary carries `repeatAt: null`, so it never starts repeating either; recentring the stick clears it. `MAX_FRAME_GAP_MS` applies the same adoption after any stall longer than 250 ms, because `requestAnimationFrame` can be throttled for a blurred window and an edge measured against a reading from an unknown time ago is not an edge — that is the half of the fix that does not depend on the focus signal arriving at all.
 
 Both sides log their transitions, and the pair is the diagnostic: main writes `Launcher gained/lost focus`, the renderer writes `Pad input suspended/resumed` with a count of the frames on which the pad reported something while it was suspended. A large count is Chromium feeding a blurred window, which is the fault this exists for; a zero across a session somebody knows they mashed the pad through means something else changed.
+
+### Pointer mode — the pad as a mouse and a keyboard
+
+Four places in this product a pad cannot reach, and `ipc.ts` says so out loud about the first: **NVIDIA's login page** (the account cannot be linked at all without a mouse and a keyboard), **the hosted web player**, **the desktop** behind a minimised launcher, and **inside a running stream**, where a Steam EULA or updater leaves a session stuck because the game is remote, the pad reaches it and the pointer does not. Holding **L3 + R3** raises a cursor; the same hold puts it away.
+
+One chord, one mapping, **two backends**, and which one answers depends only on where the user is:
+
+| In front | Backend | How |
+| --- | --- | --- |
+| The sign-in window, the web player | in-window | `webContents.sendInputEvent` on that page |
+| The launcher, the desktop, the GFN client, **a game** | desktop | `org.freedesktop.portal.RemoteDesktop` |
+
+**The chord is L3 + R3 because they are the only free pair.** `BUTTON_ACTIONS` maps 0–5 and 9, so a chord built from any of those would have to suppress the actions it is made of — inside `stepPad`, the one fold here that has to stay readable at a glance. Nothing in pointer mode touches it. The hold is 600 ms rather than a press, and that is about the streaming case: the GeForce NOW client reads the pad for itself and forwards it to the remote machine, so during a game every press means two things at once, and a bare click of both sticks is something plenty of games do deliberately.
+
+**That double meaning is accepted, and it is not a latency cost.** joydev and evdev are broadcast interfaces: each open file description gets its own ring buffer in the kernel, filled at event generation. Reading alongside the GFN client adds one 8-byte copy per event and touches nothing on its path — no grab, no exclusive access, no shared lock. `EVIOCGRAB` would end the overlap and is deliberately not used: it needs an ioctl, so a native FFI dependency, and it would leave the game with no controller at all if the exit path ever broke. Do not reopen that without new information.
+
+#### In-window: a preload that exposes nothing
+
+`src/preload/pointer.ts` is mounted on the sign-in window and the web player. This does **not** undo *"this window renders a third-party site, it gets no bridge"* — that rule was always about what the page gains, and the page gains nothing: there is no `contextBridge.exposeInMainWorld` in the file and there must never be one. Context isolation keeps the loop, the cursor and the on-screen keyboard in a world NVIDIA's code cannot see, and `window.launcher` and `require` are both still undefined in the world it runs in.
+
+It has to be a preload rather than the launcher's own renderer for the reason the rest of this section is about: when the login window is up the launcher is `handedOff` and its input is suspended, correctly. The pad has to be read by the window that has the focus.
+
+The preload decides; **main replays**. `src/main/pointer/index.ts` validates every command with `isPointerCommand` and turns it into `sendInputEvent`, which is a main-process API and produces *trusted* events — anything the preload dispatched itself would arrive `isTrusted: false`, and a login form is not the place to find out which handler checks. Main also remembers the mode per window and replays it into each new document over `pointer:restore`, because signing in is three or four navigations and each one re-executes the preload from nothing.
+
+**Each preload must bundle to exactly one file.** A sandboxed preload's `require` resolves `electron`, `events`, `timers` and `url` and throws `module not found` on everything else, so the moment two entries import the same module Rollup hoists it into a shared chunk and *both* preloads die at load — the bridge included. There is no Rollup option that duplicates shared code back into its entries, so `pointer.ts` imports `IPC` as a **type** and declares its two channel names as literals the compiler checks against it, and `oneFilePerPreload` in `electron.vite.config.ts` fails the build if a chunk is ever emitted anyway.
+
+#### Desktop: the portal, and why not uinput
+
+uinput is the obvious answer and the wrong one: creating a virtual device needs `ioctl`, which Node cannot do without native FFI, and `/dev/uinput` is root-owned on most distributions, so it would also want a udev rule installed as root. `org.freedesktop.portal.RemoteDesktop` needs none of that — pure D-Bus, and Flatpak permits talking to `org.freedesktop.portal.Desktop` with no `finish-args` at all. Because it injects at the **compositor**, it reaches inside the GeForce NOW client, which is not ours and which no Electron API can touch: the client captures the pointer and forwards it, so this is what moves the mouse in a streamed Steam window.
+
+It costs one permission dialog. That is a system window, so the first grant needs a real pointer or a keyboard — `persist_mode: 2` and the `restore_token` kept in `settings.json` are what make every session after it silent. The setting is **off by default**, because opening a portal session is the one thing here that reaches past the application and nobody should meet that dialog by accident.
+
+`src/main/pointer/evdev.ts` reads the pad, and it must: with a game in front the renderer's intents are suspended, and behind "Back to desktop" its `requestAnimationFrame` is throttled or stopped. It reads `/dev/input/js*` rather than `event*` because the kernel has already scaled every axis to ±32767 there, which is what removes the last reason to need an ioctl. Three things about that interface are easy to get wrong and are pinned by tests: joydev replays the whole device state as synthetic events tagged `0x80` when opened, and those must be **adopted** rather than acted on; its numbering is **not** the W3C one, so the stick clicks are 9 and 10 rather than 10 and 11 and the triggers sit between the sticks; and a read can split an 8-byte record, so the remainder is carried rather than dropped.
+
+**`evdev.ts` has exactly one consumer and must never gain another.** It keeps reading the pad while a game is on screen, which is precisely the situation the launcher spent a release learning not to act in. The only things downstream of it are the portal's `Notify*` calls and one boolean pushed to the renderer.
+
+**Typing works in our own windows only.** `NotifyKeyboardKeysym` reaches whatever has the focus, so the plumbing is there — but drawing a keyboard over somebody else's fullscreen window needs a floating surface, and on Wayland a client can neither place one nor stop it taking the focus that decides where the keystrokes land. A keyboard that steals the focus types into itself. The on-screen keyboard is therefore in the preload, which is also where the typing actually has to happen.
+
+Keysyms rather than keycodes, and the difference is not academic: a keycode is a *position*, so `KEY_2` shifted is `@` on a US layout and `"` on an Italian one. `src/shared/keycodes.ts` keeps a US keycode table as a fallback for a portal with no keysym support, and says so in the log when it takes it.
+
+#### What this changed about everything above
+
+Two hardening changes came with it, and the first fixes a hole that predates the feature:
+
+- **`pointer-events: none` on the app root while `handedOff`.** The pad has been gated since the pause-menu bug; the *pointer* never was. A real mouse click on the launcher behind a stream still lands on a tile, and the portal cursor adds a second way for one to get there — a cursor that wanders off the edge of a non-fullscreen GFN window arrives on our grid, where Play calls `gfn:launch` and kills the client that is streaming. Same gate, same failure direction: a focused launcher is accepted unconditionally, so this can never make a window somebody is looking at unclickable.
+- **The keyboard mirror is gated now, and the comment that argued against it is gone.** It ran: an unfocused window receives no `keydown`, so the OS has already applied a stricter rule than ours. True of a keyboard somebody is typing on, false the moment the launcher has one of its own — on Wayland the compositor may leave the focus on the launcher while a stream is in front, and a `/` typed into a remote field would open our search.
+
+`pointer:mode` is the **fifth** main → renderer channel and passes the test the other four set: the renderer cannot ask, because the chord that raises the desktop cursor is read from `/dev/input/js*` in main. It exists so the stick moves the cursor without also walking the grid underneath it — a mode check before `emit`, folded into the value handed to `stepPad` so the adoption rule covers the exit for free. `shouldAcceptInput` is untouched.
 
 ## Where shadcn/ui fits
 

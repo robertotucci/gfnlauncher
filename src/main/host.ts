@@ -45,8 +45,14 @@ export const IS_SANDBOXED = existsSync('/.flatpak-info')
  */
 export const FLATPAK_ID = process.env.FLATPAK_ID ?? null
 
-/** Shown in the `blocked` message and in the autostart entry. Kept beside the id it names. */
-const OWN_APP_ID = 'io.github.robertotucci.GfnLauncher'
+/**
+ * Shown in the `blocked` message and in the autostart entry. Kept beside the id
+ * it names.
+ *
+ * Exported for `padAccess.ts`, which spells out the other `flatpak override`
+ * this launcher can tell a user to run. Two permissions, one id, one place.
+ */
+export const OWN_APP_ID = 'io.github.robertotucci.GfnLauncher'
 
 /**
  * How long any host command may take before it is killed.

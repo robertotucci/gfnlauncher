@@ -1,0 +1,40 @@
+{
+  // The preloads, and they are their own context.
+  //
+  // They were checked under tsconfig.node.json until one of them needed a DOM.
+  // `src/preload/pointer.ts` draws a cursor and an on-screen keyboard into the
+  // page it is attached to, which means `document`, `ShadowRoot` and
+  // `requestAnimationFrame` — and the fix is emphatically *not* to add "DOM" to
+  // the main config. Main has no document, and a `lib` that says it does is how
+  // a `window.` reference gets into a process where it throws at runtime and
+  // compiles clean.
+  //
+  // So a third config for the third context, which is the split
+  // ARCHITECTURE.md already describes.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // A sandboxed preload has no Node of its own, but Electron's own type
+    // definitions reference NodeJS types across their public surface, so the
+    // package has to be visible to the checker even though the runtime is not.
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  },
+  "include": ["src/preload/**/*", "src/shared/**/*"]
+}

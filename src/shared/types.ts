@@ -352,6 +352,30 @@ export interface Settings {
    * before the first dismissal.
    */
   dismissedUpdate: string | null
+  /**
+   * Let L3 + R3 raise a cursor outside the launcher's own windows.
+   *
+   * A real preference, and off by default, because it is the one feature here
+   * that reaches past the application: it opens a `RemoteDesktop` portal
+   * session, which is a one-time system permission dialog and a virtual pointer
+   * the compositor keeps for as long as the launcher runs. Nobody should
+   * discover that by accident.
+   *
+   * Off, the pad still gets a cursor inside the sign-in window and the web
+   * player — those need no permission and are not governed by this.
+   */
+  pointerDesktop: boolean
+  /**
+   * The portal's `restore_token` from the last grant, or null.
+   *
+   * Not a preference; it is what stops the permission dialog reappearing every
+   * time. Held here rather than in a file of its own because it is exactly the
+   * kind of small, atomic, launcher-owned fact `settings.json` exists for.
+   *
+   * It is not a credential for anything but this machine's own compositor, and
+   * it is never logged.
+   */
+  pointerRestoreToken: string | null
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -366,7 +390,10 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: 'en_US',
   gfnLinked: false,
   updateCheck: true,
-  dismissedUpdate: null
+  dismissedUpdate: null,
+  // Off: it costs a system permission dialog the first time it is used.
+  pointerDesktop: false,
+  pointerRestoreToken: null
 }
 
 /**
@@ -842,5 +869,19 @@ export interface LauncherApi {
      * thing on screen.
      */
     onScreen(listener: (screen: ScreenOwnership) => void): () => void
+    /**
+     * Whether the desktop cursor is up, whenever that changes.
+     *
+     * The launcher's own UI has no cursor and needs none — every control is
+     * reachable by spatial focus. What it needs is to *stop* answering the
+     * stick while a cursor is being driven over it, or the same push would both
+     * move the pointer and walk the grid behind it.
+     *
+     * Only main can say: the chord that raises this cursor is read from
+     * `/dev/input/js*` in the main process, because the two places it is wanted
+     * — a game in front, a minimised launcher — are the two where the renderer
+     * cannot see a pad at all.
+     */
+    onPointerMode(listener: (active: boolean) => void): () => void
   }
 }

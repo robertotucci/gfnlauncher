@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { POINTER_PRELOAD, registerPointerTarget } from '../pointer'
 import { DEFAULT_GRAPHQL_ENDPOINT } from './graphql'
 import { getAuthSession } from './partition'
 
@@ -454,13 +455,27 @@ async function runCapture(options: CaptureOptions): Promise<CapturedSession> {
     title: 'Sign in to GeForce NOW',
     webPreferences: {
       session: ses,
-      // This window renders a third-party site. It gets no bridge, no preload
-      // and no Node — it exists only so the user can sign in.
+      // This window renders a third-party site. It gets no bridge and no Node —
+      // it exists only so the user can sign in.
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // The one script that goes in, and it is not a bridge.
+      //
+      // This page is the only part of the product a pad cannot drive, which is
+      // why linking an account used to need a mouse and a keyboard that nobody
+      // has on a sofa. `pointer.cjs` reads the pad in the isolated world and
+      // draws a cursor over the page; it calls `exposeInMainWorld` nowhere, so
+      // the site gains nothing it did not already have — `window.launcher` and
+      // `require` are both still undefined in the world NVIDIA's code runs in.
+      preload: POINTER_PRELOAD
     }
   })
+
+  // Paired with the preload above rather than left to a caller. A window with
+  // the script and no registration is a cursor whose every command main
+  // refuses, and the symptom of that is a pad that does nothing.
+  registerPointerTarget(window, 'the sign-in window')
 
   // Token and vpcId are gathered independently and combined when both are in.
   const found: {

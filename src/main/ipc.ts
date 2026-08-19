@@ -44,6 +44,7 @@ import {
   signIn,
   signOut
 } from './gfn/session'
+import { updatePointerSettings } from './pointer'
 import { listRecent, recordPlay } from './recent'
 import { setHandedOff } from './screen'
 import { getStatus, refreshStatus } from './status'
@@ -467,6 +468,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // sofa, so this toggle is the only way a gamepad can put a launcher that
       // ended up windowed back to fullscreen.
       if (patch.fullscreen !== undefined) setFullscreen(getWindow(), next.fullscreen)
+      // Unconditional rather than behind a `patch.pointerDesktop !== undefined`
+      // check: the desktop backend reads its settings from a snapshot, because
+      // the chord lives inside a 60 Hz tick where nothing may be asynchronous.
+      // A snapshot that is only refreshed when the pointer row is touched goes
+      // stale the first time the token is written from anywhere else.
+      updatePointerSettings(next)
       return next
     }
   )
