@@ -126,19 +126,21 @@ Some things are not a grid. **Hold L3 + R3** — both stick clicks, for about ha
 | Right stick | Scroll |
 | **A** | Left click |
 | **B** | Right click |
-| **X** | On-screen keyboard |
+| **LB + RB** | Show or hide the on-screen keyboard |
 | **☰** | Put the cursor away |
 
-With the keyboard open the stick picks a key and **A** types it; **B** closes it. It is alphabetical like the search one, and it has every character on it, because a password with a backslash in it is not one you can leave out.
+With the keyboard open the stick picks a key and **A** types it; **LB + RB** again — or **B** — hides it. It is alphabetical like the search one, and it has every character on it, because a password with a backslash in it is not one you can leave out.
 
-This works out of the box in the two places the launcher itself puts a web page in front of you: **signing in to NVIDIA**, which is the one screen a pad genuinely cannot navigate and the reason an account could not be linked from a sofa at all, and the **web player**.
+The keyboard is on the shoulders rather than on a face button because with a cursor on screen the face buttons read as mouse buttons, and a third one that does something else is a button nobody finds. Two shoulders, next to the two stick clicks that opened the mode.
+
+**The keyboard only exists in the two places the launcher itself puts a web page in front of you**: **signing in to NVIDIA**, which is the one screen a pad genuinely cannot navigate and the reason an account could not be linked from a sofa at all, and the **web player**. Both work out of the box, with nothing to switch on. On the desktop and inside a game there is no keyboard — see the note at the end of this section.
 
 **Outside the launcher it is off by default** — see *Cursor outside the launcher* under Settings → Pointer. Switched on, the same hold gives you a real cursor on the desktop and, more usefully, **inside a running game**: a Steam licence prompt or an updater that wants a click is otherwise a stuck session. It asks your desktop for permission the first time, in a system dialog that needs a real mouse or keyboard to answer; after that it is remembered and silent.
 
 Two things to know before you use it in a game:
 
 - **The pad still reaches the game.** GeForce NOW reads the controller itself and forwards it, and the launcher does not take it away — doing so would need to seize the device, and a bug in putting it back would leave you with no controller at all. So while the cursor is up the stick moves it *and* whatever the game does with a stick. In the situation this is for — a dialog on top of a game that is not listening — that costs nothing. It is why the chord is a deliberate hold rather than a click.
-- **The on-screen keyboard is launcher-windows only.** Drawing one over another program's fullscreen window needs a floating surface Wayland will not let an application place, and one that took the focus would type into itself. The cursor works everywhere; typing works where the launcher owns the window.
+- **The on-screen keyboard is launcher-windows only**, so **LB + RB** does nothing out here. This is measured rather than assumed: a window created the way an overlay would have to be — `focusable: false`, always on top, shown without activating — still took the focus away from the window underneath it on KDE Wayland. The focus is exactly what decides where a keystroke lands, so a keyboard drawn that way types into itself. The cursor works everywhere; typing works where the launcher owns the window. If you need to type into a game, [AntiMicroX](#a-full-keyboard-on-the-pad-everywhere--antimicrox) is the answer, and it is kernel-side for the same reason.
 
 ## What is in it
 
@@ -149,8 +151,22 @@ Two things to know before you use it in a game:
 - **Details panel** — description, screenshots, supported controls, subscription tier, and store chips for picking which store's edition launches
 - **Status** — GeForce NOW service health, opening with *your* datacenter rather than a list of 76. Read from the client's own routing configuration on this disk, so it needs no account and works offline
 - **Pointer mode** — hold L3 + R3 and the pad becomes a mouse and a keyboard, for the screens that are not a grid
+- **Bluetooth** — pair a pad, a headset or a keyboard without leaving the launcher. See [pairing a device](#pairing-a-device)
 - **Settings** — sign-in, library sync, accent colour, interface scale (75–175%), fullscreen, autostart, launch mode, pointer mode
 - **Power** — back to desktop, sleep, restart, turn off. The launcher is the last thing on screen before the TV goes off
+
+## Pairing a device
+
+**Settings → Bluetooth devices.** Two lists: what you have already paired, and what is in the room. Press A on Scan, put the device into pairing mode — usually a button held until its light flashes — and press A on its row. A again connects or disconnects something already paired; **X** forgets it.
+
+What is nearby is **ordered by signal strength**, with a four-tick meter on each row, which is how you tell which of three rows called *Wireless Controller* is the one in your hand. Devices that report a battery show it.
+
+**The pairing is your system's, not the launcher's.** It drives BlueZ over the same interface your desktop's own Bluetooth panel uses, as your own user and with nothing elevated — so a pad paired here is paired everywhere, shows up in that panel, and comes back after a reboot. Forgetting one here removes it from the computer, not just from this screen.
+
+Two limits worth knowing:
+
+- **A device that wants a PIN typed on the computer is refused, and says so.** Numeric confirmation works — the launcher shows the six digits and A confirms them — and so does a code you type on the *other* device. Something that wants you to type into this machine needs a keyboard this screen does not have; pair it from your desktop's Bluetooth settings.
+- **Pairing a pad needs a pad.** Or a keyboard: arrow keys, Enter and Escape drive every screen. The launcher cannot help you with the very first controller, only with the second one.
 
 ## Signing in
 
@@ -158,7 +174,7 @@ Open **Settings** (Y) and choose **Sign in to GeForce NOW**. NVIDIA's own sign-i
 
 Two things worth knowing:
 
-- **NVIDIA's login page is not gamepad-navigable**, so the launcher brings its own cursor: hold **L3 + R3** in that window and the pad becomes a mouse, with **X** for an on-screen keyboard to type the address and the password. See [pointer mode](#pointer-mode--the-pad-as-a-mouse). No setting to switch on, and no permission — it works there out of the box.
+- **NVIDIA's login page is not gamepad-navigable**, so the launcher brings its own cursor: hold **L3 + R3** in that window and the pad becomes a mouse, then **LB + RB** for an on-screen keyboard to type the address and the password. See [pointer mode](#pointer-mode--the-pad-as-a-mouse). No setting to switch on, and no permission — it works there out of the box.
 - The launcher reads the session off that window and keeps the bearer token in memory only. It is never written to disk.
 
 ## Sandbox permissions, and why
@@ -177,17 +193,18 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 | `--talk-name=org.gnome.SessionManager`, `…PowerManagement`, `…ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one, rather than the whole session bus for one call |
 | `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen — and noticing when a game has finished, so the launcher can close the client and take the screen back |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
+| `--system-talk-name=org.bluez` | [Pairing a device](#pairing-a-device). The only name on the system bus, and the same calls your desktop's Bluetooth panel makes as the same unprivileged user — BlueZ's own policy allows them, and there is no polkit on this path. It is `talk` rather than `see` because BlueZ calls *back* to ask whether a pairing code matches |
 | `--share=network` | The catalog, sign-in, and the status page |
 | `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc` | Drawing a window |
 | `--socket=pulseaudio` | Sound, for the web-player fallback |
 
 **`--talk-name=org.freedesktop.Flatpak` is effectively an exit from the sandbox**, and there is no way around it for an app whose entire purpose is to drive another Flatpak. There is no portal for "launch this Flatpak with these arguments" — the deep link is an argv, not a URI scheme — and stopping a running client needs the host too. If that trade is not one you want to make, the AppImage does the same things with no sandbox at all, which is at least honest about it.
 
-It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three names under it are ordinary session services being asked a question; none of them can run anything.
+It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three screen names under it, and the BlueZ one, are ordinary services being asked a question; none of them can run anything.
 
 **Nothing in that list is what gives the cursor the desktop.** [Pointer mode](#pointer-mode--the-pad-as-a-mouse) outside the launcher's own windows goes through `org.freedesktop.portal.RemoteDesktop`, which is a portal — Flatpak permits every application to talk to the portals, and a portal is the sanctioned way out precisely because *you* answer for it, once, in a dialog the launcher cannot draw or dismiss. That is also why it needed no new line above, and why the alternative was rejected: a virtual device through `/dev/uinput` would have wanted `--device=all` to mean rather more than reading a pad, plus a udev rule installed as root. Revoke it in your desktop's remote-control or screen-sharing settings and the cursor stops at the launcher's own windows, where it needs nothing.
 
-Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the host one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed. Revoke the three screen ones and nothing will say so — a blocked Inhibit call still looks like it succeeded from inside the sandbox, and all you see is the screen going dark while you browse, which is what it did before it asked.
+Every permission can be revoked with [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or `flatpak override`. Revoke the host one and the launcher will tell you what is missing rather than pretending GeForce NOW is not installed. Revoke the BlueZ one and the Devices screen prints the command that grants it back. Revoke the three screen ones and nothing will say so — a blocked Inhibit call still looks like it succeeded from inside the sandbox, and all you see is the screen going dark while you browse, which is what it did before it asked.
 
 ## Waking the machine with the pad
 

@@ -1,5 +1,5 @@
 import { type ComponentType, type ReactNode } from 'react'
-import { ArrowUpCircle, ExternalLink, LogIn, LogOut, RefreshCw } from 'lucide-react'
+import { ArrowUpCircle, Bluetooth, ExternalLink, LogIn, LogOut, RefreshCw } from 'lucide-react'
 import type { LaunchMode, LinkedProvider, Settings, UpdateStatus } from '@shared/types'
 import {
   ACCENT_PRESETS,
@@ -402,6 +402,7 @@ export function SettingsScreen({
   appVersion,
   logPath,
   onUpdate,
+  onOpenDevices,
   onRefreshCatalog,
   onSyncAll,
   onOpenGfn,
@@ -446,6 +447,8 @@ export function SettingsScreen({
    */
   logPath: string | null
   onUpdate: (patch: Partial<Settings>) => void
+  /** Opens the Devices screen, which is a page of this one rather than a view. */
+  onOpenDevices: () => void
   onRefreshCatalog: () => void
   onSyncAll: () => void
   onOpenGfn: () => void
@@ -590,6 +593,23 @@ export function SettingsScreen({
             gfnInstalled={gfnInstalled}
             gfnProbeError={gfnProbeError}
             onSelect={(launchMode) => onUpdate({ launchMode })}
+          />
+        </Section>
+
+        {/* Directly above Pointer: both sections are about what is in the
+            user's hands, and neither is about GeForce NOW. */}
+        <Section title="Devices">
+          <ActionRow
+            id="setting:devices"
+            scope={scope}
+            label="Bluetooth devices"
+            // Says what it is for before what it is, because the reason
+            // somebody is reading this row is that something in the room has
+            // stopped working. The second sentence is the promise that matters:
+            // this is the system's pairing, not a copy of it.
+            description="Pair a gamepad, a headset or a keyboard, and reconnect one you have paired before. Pairing is done by the system, so it holds outside the launcher too."
+            icon={Bluetooth}
+            onConfirm={onOpenDevices}
           />
         </Section>
 

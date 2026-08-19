@@ -2,6 +2,8 @@ import { ipcRenderer } from 'electron'
 import type { IPC as IpcChannels } from '@shared/ipc'
 import {
   CHORD_START,
+  KEYBOARD_CHORD_BUTTONS,
+  KEYBOARD_CHORD_HOLD_MS,
   centreOf,
   chordHeld,
   heldActions,
@@ -9,6 +11,7 @@ import {
   stepChord,
   stepPointer,
   stepPointerButtons,
+  type ChordState,
   type Direction,
   type PointerActionName,
   type PointerCommand,
@@ -91,6 +94,8 @@ function send(command: PointerCommand): void {
 let active = false
 let cursor: PointerState = { x: 0, y: 0, at: 0 }
 let chord = CHORD_START
+/** The shoulder pair. Its own state, so one chord cannot disarm the other. */
+let keyboardChord: ChordState = CHORD_START
 let held: readonly PointerActionName[] = []
 let lastSample = 0
 
@@ -276,9 +281,10 @@ function buildKeyboard(): HTMLElement {
  */
 function hintText(): string {
   return keyboardOpen
-    ? '<span><b>A</b>Type</span><span><b>B</b>Close keys</span><span><b>☰</b>Exit pointer</span>'
+    ? '<span><b>A</b>Type</span><span><b>LB+RB</b>Hide keyboard</span>' +
+        '<span><b>B</b>Hide keyboard</span><span><b>☰</b>Exit pointer</span>'
     : '<span><b>A</b>Click</span><span><b>B</b>Right click</span>' +
-        '<span><b>X</b>Keyboard</span><span><b>☰</b>Exit pointer</span>'
+        '<span><b>LB+RB</b>Keyboard</span><span><b>☰</b>Exit pointer</span>'
 }
 
 function paint(): void {
@@ -381,6 +387,9 @@ function setMode(next: boolean, reason: string): void {
   keyboardOpen = false
   shift = false
   keyboardNav = OSK_NAV_START
+  // Back to unarmed, which is what makes the adoption rule apply again: a
+  // shoulder already down as the mode opens must not raise the keyboard with it.
+  keyboardChord = CHORD_START
 
   if (active) {
     cursor = centreOf(bounds(), lastSample)
@@ -428,13 +437,22 @@ function pressKeyboardKey(key: OskKey): void {
   }
 }
 
+/** LB + RB, and it is a toggle in both directions. */
+function toggleKeyboard(): void {
+  keyboardOpen = !keyboardOpen
+  if (keyboardOpen) {
+    keyboardAt = OSK_START
+    keyboardNav = OSK_NAV_START
+  }
+}
+
 function onAction(action: PointerActionName, down: boolean): void {
   if (keyboardOpen) {
     if (!down) return
     if (action === 'leftClick') {
       const key = oskKeyAt(OSK_ROWS, keyboardAt)
       if (key) pressKeyboardKey(key)
-    } else if (action === 'rightClick' || action === 'toggleKeyboard') {
+    } else if (action === 'rightClick') {
       keyboardOpen = false
     } else if (action === 'exit') {
       setMode(false, '☰ while the keyboard was up')
@@ -452,13 +470,6 @@ function onAction(action: PointerActionName, down: boolean): void {
         x: cursor.x,
         y: cursor.y
       })
-      return
-    case 'toggleKeyboard':
-      if (down) {
-        keyboardOpen = true
-        keyboardAt = OSK_START
-        keyboardNav = OSK_NAV_START
-      }
       return
     case 'exit':
       if (down) setMode(false, '☰')
@@ -492,6 +503,17 @@ function poll(): void {
     held = []
     return
   }
+
+  // The shoulders, and only while the mode is up: outside it LB and RB page
+  // through genres on the grid, and that binding is not ours to take.
+  const keyboardStep = stepChord(
+    keyboardChord,
+    chordHeld(sample.buttons, KEYBOARD_CHORD_BUTTONS),
+    now,
+    KEYBOARD_CHORD_HOLD_MS
+  )
+  keyboardChord = keyboardStep.next
+  if (keyboardStep.toggle) toggleKeyboard()
 
   // Button edges first, so a click lands where the cursor was drawn rather than
   // where this frame is about to move it.

@@ -12,12 +12,33 @@ import { useFocusable } from '@/focus/SpatialFocus'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-export type View = 'recent' | 'library' | 'catalog' | 'status' | 'settings' | 'support'
+/**
+ * `devices` is a view with no rail item, and the only one.
+ *
+ * It is reached from a Settings row and B goes back there, so it behaves like a
+ * page of Settings rather than a destination of its own — which is also why the
+ * rail keeps Settings marked while it is up. A seventh button was the obvious
+ * alternative and does not fit: this rail has no overflow handling, and at 175%
+ * interface scale the seven controls already here are taller than a 1080p
+ * screen. Pairing a headset is a thing you do twice a year; it must not cost a
+ * permanent slot in the one piece of chrome that is always on screen.
+ */
+export type View =
+  | 'recent'
+  | 'library'
+  | 'catalog'
+  | 'status'
+  | 'settings'
+  | 'devices'
+  | 'support'
 
 // Recent goes first because it is the shortest path back to what the user was
 // already playing, which is the most likely reason the launcher is open at all.
 // Navigation is geometric, not DOM-ordered, so the position is purely editorial.
-const ITEMS: { id: View; label: string; Icon: typeof LayoutGrid; tint?: string }[] = [
+/** Only the views that have a button. `devices` deliberately has none. */
+type RailView = Exclude<View, 'devices'>
+
+const ITEMS: { id: RailView; label: string; Icon: typeof LayoutGrid; tint?: string }[] = [
   { id: 'recent', label: 'Recent', Icon: History },
   { id: 'library', label: 'Library', Icon: Gamepad2 },
   { id: 'catalog', label: 'Catalog', Icon: LayoutGrid },
@@ -109,9 +130,13 @@ export function NavRail({
 }: {
   view: View
   scope: string
-  onSelect: (view: View) => void
+  onSelect: (view: RailView) => void
   onPower: () => void
 }): ReactNode {
+  // Devices is a page of Settings that happens to fill the screen, so the rail
+  // keeps naming where the user came from and where B will put them back.
+  const marked: RailView = view === 'devices' ? 'settings' : view
+
   return (
     <nav className="border-border/60 flex w-24 shrink-0 flex-col gap-1.5 border-r px-2 py-6">
       {ITEMS.map((item) => (
@@ -120,7 +145,7 @@ export function NavRail({
           id={`nav:${item.id}`}
           label={item.label}
           Icon={item.Icon}
-          active={view === item.id}
+          active={marked === item.id}
           tint={item.tint}
           scope={scope}
           onSelect={() => onSelect(item.id)}

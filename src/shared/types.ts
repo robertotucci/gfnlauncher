@@ -5,6 +5,7 @@
  * that all three bundles can consume it.
  */
 
+import type { BluetoothAction } from './bluetooth'
 import type { ScreenOwnership } from './input'
 import { DEFAULT_ACCENT, DEFAULT_UI_SCALE } from './theme'
 
@@ -670,6 +671,113 @@ export interface Diagnostics {
   sandboxed: boolean
 }
 
+/**
+ * What kind of thing a Bluetooth device is, as far as an icon is concerned.
+ *
+ * Ours rather than BlueZ's: the daemon publishes a freedesktop *icon name*
+ * ("input-gaming", "audio-headset") and, for devices that carry none, a packed
+ * class-of-device integer. Both are resolved to one of these on the main side
+ * by `deviceKind`, so the renderer picks a glyph from a closed union instead of
+ * pattern-matching a string somebody else owns.
+ */
+export type BluetoothKind =
+  | 'gamepad'
+  | 'headset'
+  | 'headphones'
+  | 'speaker'
+  | 'keyboard'
+  | 'mouse'
+  | 'phone'
+  | 'computer'
+  | 'display'
+  | 'unknown'
+
+export interface BluetoothDevice {
+  /**
+   * `AA:BB:CC:DD:EE:FF`. The launcher's key for this device — focus ids and
+   * every action payload carry it — and deliberately never drawn on screen: a
+   * MAC read from three metres is noise, and two devices with the same name are
+   * told apart by the signal meter instead.
+   *
+   * It never reaches the log either. `redactSecrets` would replace it with
+   * `<mac>` anyway, which is why every diagnostic in `src/main/bluetooth/`
+   * names the device and the operation rather than the address.
+   */
+  address: string
+  /** `Alias` when the user has renamed it, else `Name`, else a placeholder. */
+  name: string
+  kind: BluetoothKind
+  paired: boolean
+  connected: boolean
+  /** dBm, while a scan is running and the adapter is hearing it. Null otherwise. */
+  rssi: number | null
+  /** `org.bluez.Battery1.Percentage`. Null for a device that reports none. */
+  battery: number | null
+  /** An action on this device is in flight, so the row shows a spinner. */
+  busy: boolean
+}
+
+/**
+ * A pairing BlueZ wants answered before it can finish.
+ *
+ * `confirm` is numeric comparison: the same six digits are on both devices and
+ * the user says whether they match. `display` is a code to type on the *other*
+ * device, so there is nothing here to press and the band clears itself when the
+ * pairing completes.
+ *
+ * The two agent methods that ask the launcher to *type* a code are refused
+ * outright — a pad cannot — and that refusal arrives as an ordinary action
+ * error rather than as one of these.
+ */
+export interface BluetoothPairingRequest {
+  address: string
+  name: string
+  kind: 'confirm' | 'display'
+  /** Six digits, zero-padded, as BlueZ hands it over. */
+  passkey: string
+}
+
+export interface BluetoothSnapshot {
+  /** False when the machine has no adapter, or bluetoothd is not running. */
+  available: boolean
+  powered: boolean
+  /**
+   * **Our** scan, not `Adapter1.Discovering`.
+   *
+   * That property is adapter-global and is routinely true because the desktop's
+   * own Bluetooth panel is scanning. Reporting it would have this screen claim
+   * to be searching when it is not, and leave the control unable to stop it.
+   */
+  scanning: boolean
+  adapterName: string | null
+  /** Known to the adapter. Connected first, then by name. */
+  paired: BluetoothDevice[]
+  /** Unpaired and currently being heard. Strongest signal first. */
+  nearby: BluetoothDevice[]
+  request: BluetoothPairingRequest | null
+  /**
+   * Why the feature is unusable at all — no adapter, no daemon, a sandbox
+   * refused the bus. Not where a failed action goes: that is `BluetoothResult`,
+   * because "this pairing did not work" and "there is no Bluetooth here" want
+   * different sentences in different places on the screen.
+   */
+  error: string | null
+}
+
+/**
+ * Outcome of one Bluetooth action.
+ *
+ * Carries the snapshot for the same reason `StoreMutationResult` carries the
+ * patched game: the caller has just changed the thing it is displaying, and a
+ * second round trip to find out what happened is a frame of the screen
+ * disagreeing with itself.
+ */
+export interface BluetoothResult {
+  ok: boolean
+  error: string | null
+  snapshot: BluetoothSnapshot
+}
+
 export interface AuthStatus {
   authenticated: boolean
 }
@@ -757,6 +865,44 @@ export interface LauncherApi {
      * never opened has nothing to correct anyway.
      */
     onZone(listener: (zone: ZoneStatus) => void): () => void
+  }
+  /**
+   * Pairing and connecting the hardware in the room.
+   *
+   * BlueZ does all of it — the launcher is a client of the system's Bluetooth
+   * stack in exactly the way the desktop's own panel is, and nothing here
+   * implements a pairing of its own.
+   *
+   * **No subscription, unlike the other live surfaces on this bridge.** The
+   * five main → renderer channels each exist because the renderer has no way of
+   * knowing there is anything to ask about; the Devices screen knows perfectly
+   * well that it is looking at a moving list, so it polls this while it is open
+   * and main answers out of a model its own D-Bus signals keep current. A poll
+   * therefore costs no bus traffic, and the bridge does not grow a sixth push.
+   */
+  bluetooth: {
+    /** Never throws: an unusable adapter comes back as a snapshot with `error`. */
+    get(): Promise<BluetoothSnapshot>
+    /**
+     * Starts or stops discovery.
+     *
+     * Discovery is reference-counted by BlueZ per client, so stopping releases
+     * only the launcher's request and cannot end a scan the desktop started.
+     * A scan left running stops itself after a minute.
+     */
+    scan(on: boolean): Promise<BluetoothResult>
+    /** Turns the adapter itself on or off — `Adapter1.Powered`. */
+    power(on: boolean): Promise<BluetoothResult>
+    /** Pair, connect, disconnect or forget the device with this address. */
+    act(action: BluetoothAction, address: string): Promise<BluetoothResult>
+    /**
+     * Answers the pairing confirmation in `BluetoothSnapshot.request`.
+     *
+     * BlueZ is holding a D-Bus call open while this is pending, so a request
+     * that is never answered is a pairing that never finishes. The screen only
+     * shows the band while a request exists, and leaving the screen cancels it.
+     */
+    respond(accept: boolean): Promise<BluetoothResult>
   }
   recent: {
     /**

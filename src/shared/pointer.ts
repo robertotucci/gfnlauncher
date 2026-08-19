@@ -73,6 +73,31 @@ export const CHORD_BUTTONS_JOYDEV: readonly number[] = [9, 10]
 export const CHORD_HOLD_MS = 600
 
 /**
+ * The shoulder pair, which raises and lowers the on-screen keyboard.
+ *
+ * **The same two numbers on both interfaces**, unlike the stick clicks: LB and
+ * RB are 4 and 5 in the W3C mapping and 4 and 5 on joydev. One constant, and
+ * the coincidence is asserted in the suite so a future reader does not "fix" it
+ * into a second table.
+ *
+ * A pair rather than a single button because inside pointer mode the face
+ * buttons are already a mouse — A and B are the two clicks — and the shoulders
+ * are the only thing left that is symmetrical enough to be remembered next to
+ * L3 + R3.
+ */
+export const KEYBOARD_CHORD_BUTTONS: readonly number[] = [4, 5]
+
+/**
+ * Pressed, not held.
+ *
+ * L3 + R3 needs a deliberate hold because during a game it means something to
+ * the game as well. This one only exists *inside* pointer mode, where nothing
+ * else is listening to the shoulders at all, so making the user wait would be
+ * caution with nothing to be cautious about.
+ */
+export const KEYBOARD_CHORD_HOLD_MS = 0
+
+/**
  * Beyond this, the previous sample is history rather than context.
  *
  * The twin of `MAX_FRAME_GAP_MS` in `pad.ts`, and it exists for the same
@@ -127,7 +152,12 @@ export function chordHeld(pressed: Iterable<number>, chord = CHORD_BUTTONS): boo
  * hypothetical: the first thing anybody does with a new chord is hold it to see
  * what happens.
  */
-export function stepChord(state: ChordState, held: boolean, now: number): ChordStep {
+export function stepChord(
+  state: ChordState,
+  held: boolean,
+  now: number,
+  holdMs: number = CHORD_HOLD_MS
+): ChordStep {
   // Let go. This is also the only thing that arms the chord, so a pair that was
   // already down when this state was created stays inert until it is released.
   if (!held) {
@@ -142,7 +172,7 @@ export function stepChord(state: ChordState, held: boolean, now: number): ChordS
   const since = stalled || state.since === null ? now : state.since
   const fired = stalled ? false : state.fired
 
-  if (fired || now - since < CHORD_HOLD_MS) {
+  if (fired || now - since < holdMs) {
     return { next: { since, fired, armed: true, at: now }, toggle: false }
   }
 
@@ -270,20 +300,25 @@ export function scrollDelta(axis: number, dtMs: number): number {
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
 
-export type PointerActionName = 'leftClick' | 'rightClick' | 'toggleKeyboard' | 'exit'
+export type PointerActionName = 'leftClick' | 'rightClick' | 'exit'
 
 /**
  * What each face button does while the cursor is up.
  *
  * A and B keep their shape — confirm and cancel become the two mouse buttons —
- * and X keeps the association it already has with typing, since on the grid it
- * opens the search field. ☰ is the second way out, because a mode with one exit
- * is a mode somebody will get stuck in.
+ * and ☰ is the second way out, because a mode with one exit is a mode somebody
+ * will get stuck in.
+ *
+ * **The keyboard is not here.** It was on X, on the reasoning that X already
+ * means typing on the grid, and that turned out to be the wrong instinct: with
+ * a cursor on screen the face buttons read as mouse buttons, and a third one
+ * that does something else entirely is a button nobody finds. It is
+ * `KEYBOARD_CHORD_BUTTONS` now — a shoulder pair, symmetrical with the chord
+ * that opened the mode in the first place.
  */
 export const POINTER_ACTIONS: Readonly<Record<number, PointerActionName>> = {
   0: 'leftClick',
   1: 'rightClick',
-  2: 'toggleKeyboard',
   9: 'exit'
 }
 
@@ -291,7 +326,6 @@ export const POINTER_ACTIONS: Readonly<Record<number, PointerActionName>> = {
 export const POINTER_ACTIONS_JOYDEV: Readonly<Record<number, PointerActionName>> = {
   0: 'leftClick',
   1: 'rightClick',
-  2: 'toggleKeyboard',
   7: 'exit'
 }
 

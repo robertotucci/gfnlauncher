@@ -50,7 +50,9 @@ Three details are not what you would guess, and were checked against flatpak 1.1
 
 Two more things the sandbox needs, which are permissions rather than code: `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` for the Status screen's read of `sharedstorage.json`, and read access to the Flatpak install roots for `appConfig.ts`. Both degrade rather than throw when denied.
 
-A third, and the only one whose denial is undetectable: the three `--talk-name`s that let `displaySleep.ts` inhibit screen blanking. A `powerSaveBlocker` whose D-Bus call the sandbox refused still hands back a valid blocker id and still reports `isStarted()`, so there is nothing to classify and nothing to surface — the symptom is the screen blanking, which is also the symptom of not having asked. Chromium picks the interface the session offers, hence three names rather than one.
+A third arrived with [Bluetooth pairing](#pairing-a-device) and is the only one on the **system** bus: `--system-talk-name=org.bluez`. It is not a host escape — BlueZ's own shipped D-Bus policy grants the default context `send_destination="org.bluez"`, which is how any user session pairs a headset — and its denial is legible, since every call answers `AccessDenied` and the screen prints the `flatpak override` that grants it back.
+
+A fourth, and the only one whose denial is undetectable: the three `--talk-name`s that let `displaySleep.ts` inhibit screen blanking. A `powerSaveBlocker` whose D-Bus call the sandbox refused still hands back a valid blocker id and still reports `isStarted()`, so there is nothing to classify and nothing to surface — the symptom is the screen blanking, which is also the symptom of not having asked. Chromium picks the interface the session offers, hence three names rather than one.
 
 ## Input and focus
 
@@ -136,6 +138,8 @@ One chord, one mapping, **two backends**, and which one answers depends only on 
 | The sign-in window, the web player | in-window | `webContents.sendInputEvent` on that page |
 | The launcher, the desktop, the GFN client, **a game** | desktop | `org.freedesktop.portal.RemoteDesktop` |
 
+**The keyboard is on LB + RB, and it started on X.** X already means typing on the grid, which looked like the obvious home for it and was the wrong instinct: once a cursor is on screen the face buttons read as *mouse* buttons — A clicks, B right-clicks — and a third one that opens a keyboard instead is a button nobody finds. `KEYBOARD_CHORD_BUTTONS` is a shoulder pair, symmetrical with the stick pair that raised the cursor, and it is 4 and 5 on **both** numberings, unlike the stick clicks. It fires on the press rather than on a hold, because inside pointer mode nothing else is listening to the shoulders — outside it they page through genres, which is why it is scoped to the mode rather than added to `BUTTON_ACTIONS`.
+
 **The chord is L3 + R3 because they are the only free pair.** `BUTTON_ACTIONS` maps 0–5 and 9, so a chord built from any of those would have to suppress the actions it is made of — inside `stepPad`, the one fold here that has to stay readable at a glance. Nothing in pointer mode touches it. The hold is 600 ms rather than a press, and that is about the streaming case: the GeForce NOW client reads the pad for itself and forwards it to the remote machine, so during a game every press means two things at once, and a bare click of both sticks is something plenty of games do deliberately.
 
 **That double meaning is accepted, and it is not a latency cost.** joydev and evdev are broadcast interfaces: each open file description gets its own ring buffer in the kernel, filled at event generation. Reading alongside the GFN client adds one 8-byte copy per event and touches nothing on its path — no grab, no exclusive access, no shared lock. `EVIOCGRAB` would end the overlap and is deliberately not used: it needs an ioctl, so a native FFI dependency, and it would leave the game with no controller at all if the exit path ever broke. Do not reopen that without new information.
@@ -160,7 +164,7 @@ It costs one permission dialog. That is a system window, so the first grant need
 
 **`evdev.ts` has exactly one consumer and must never gain another.** It keeps reading the pad while a game is on screen, which is precisely the situation the launcher spent a release learning not to act in. The only things downstream of it are the portal's `Notify*` calls and one boolean pushed to the renderer.
 
-**Typing works in our own windows only.** `NotifyKeyboardKeysym` reaches whatever has the focus, so the plumbing is there — but drawing a keyboard over somebody else's fullscreen window needs a floating surface, and on Wayland a client can neither place one nor stop it taking the focus that decides where the keystrokes land. A keyboard that steals the focus types into itself. The on-screen keyboard is therefore in the preload, which is also where the typing actually has to happen.
+**Typing works in our own windows only, and this was measured.** `NotifyKeyboardKeysym` reaches whatever has the focus, so the plumbing is there — but drawing a keyboard over somebody else's fullscreen window needs a floating surface. A window created the way that overlay would have to be — `focusable: false`, `alwaysOnTop`, `showInactive()` — was tried on KDE Wayland and the window underneath **lost its focus anyway**. Since the focus is exactly what decides where a keystroke lands, a keyboard drawn that way types into itself. The on-screen keyboard is therefore in the preload, which is also where the typing actually has to happen. LB + RB out there logs one line saying so rather than doing nothing silently.
 
 Keysyms rather than keycodes, and the difference is not academic: a keycode is a *position*, so `KEY_2` shifted is `@` on a US layout and `"` on an Italian one. `src/shared/keycodes.ts` keeps a US keycode table as a fallback for a portal with no keysym support, and says so in the log when it takes it.
 
@@ -462,6 +466,54 @@ The other half of that fix is that **the Settings toggle now applies immediately
 `powerSaveBlocker` rather than the renderer's Screen Wake Lock API: a page wake lock lasts as long as the document is visible, and this document is always visible.
 
 **Waking the machine with the pad is not something the launcher can do.** `/sys/bus/usb/devices/*/power/wakeup` is root-owned; it takes one udev rule, documented in [docs/wake-on-gamepad.md](./docs/wake-on-gamepad.md). Settings used to carry a card pointing at that file; it was static text with no control in it, so it is gone and the doc is the only pointer left. Privilege escalation is not on the table for this.
+
+## Pairing a device
+
+`src/main/bluetooth/`, behind a **Devices** screen reached from Settings. It sits next to Power in this document because it is the same kind of thing: the launcher controlling the machine it runs on, for something there is no other way to do from a sofa. Every peripheral in that room arrives over Bluetooth, and until this existed the answer to a dead pad was to find a mouse and leave the launcher.
+
+**The launcher implements no pairing.** BlueZ does all of it, over the same D-Bus API the desktop's own panel uses, so what happens here shows up there and survives a reboot. This is a client, and a thin one.
+
+**Direct D-Bus rather than `bluetoothctl` through `host.ts`**, which would have needed no new permission and was still the wrong answer. `bluetoothctl` is a *client of this API* that prints for humans: going through it means parsing text to learn what a structured reply already says, and this codebase treats that as a last resort — `flatpakProgress.ts` is the one place it was unavoidable and it documents itself as such. It would also cost the signals, and a discovery list that fills itself is the difference between a screen and a form. `@homebridge/dbus-native` was already a dependency and `pointer/portal.ts` was already the pattern; this is the second D-Bus client in the process and the first on the **system** bus.
+
+**The error vocabulary is locale-proof by construction, and that is worth noticing.** `classifyHostFailure` cannot match on the portal's message because the portal writes it in the host session's language; `scanFlatpakProgress` reads only the digits before a `%` for the same reason. D-Bus error *names* are ASCII identifiers on the wire, so `describeBluezError` matches the name and never the text beside it. Two of them earn their branch: `ServiceUnknown` is a stopped `bluetooth.service` and not a missing adapter, and `AccessDenied` is the sandbox, reported with the `flatpak override` that grants it back — exactly as `classifyHostFailure` reports its own.
+
+### What is held, and why it is a mirror
+
+`GetManagedObjects` once, then `InterfacesAdded`, `InterfacesRemoved` and `PropertiesChanged` amend it. Everything the screen asks is answered from that mirror, which is what makes the poll free.
+
+Three things about the fold are pinned by `model.test.ts` because the obvious implementation gets them wrong:
+
+- **`InterfacesAdded` merges, it does not replace.** BlueZ announces `org.bluez.Battery1` on a path that already carries `org.bluez.Device1`, and taking the announcement as the whole object drops the device it belongs to.
+- **`InterfacesRemoved` is not a delete.** It is used both for "this device is gone" and for "this device stopped reporting a battery", and only the interface list says which.
+- **`invalidated` matters as much as `changed`.** BlueZ invalidates `RSSI` when it stops hearing a device rather than setting it to a floor, so a fold that applied only `changed` would leave a four-tick signal on something that left the room.
+
+**`Adapter1.Discovering` is adapter-global and is not what the screen reports.** It is routinely true because the desktop's own panel is scanning — it was true on the machine this was written on, before a line of it existed. Reporting it would have the screen claim to be searching when it is not, and leave the control unable to stop it. So `scanning` is the launcher's own request. BlueZ reference-counts discovery per client, which is also why stopping ours cannot end somebody else's.
+
+### The agent, and its five seconds
+
+BlueZ does not pair on its own: it hands the interactive part to an *agent*, a D-Bus object the pairing client publishes, and with none available a pairing that needs any confirmation simply fails. `agent.ts` publishes one at `/io/github/robertotucci/GfnLauncher/bt_agent` — slashes rather than dots, because an object path allows `[A-Za-z0-9_]` and `/` only.
+
+It is registered immediately before `Device1.Pair` and unregistered in a `finally`, and that scope **is** the design. Registered for the session, `RequestDefaultAgent` would make the launcher the answer to *incoming* pairings, so a phone trying to pair with this machine would raise a confirmation over a game grid; and the desktop's own agent would stay displaced all evening rather than for the length of one press. On unregister BlueZ hands the default back to another registered agent on its own.
+
+The capability is **`DisplayYesNo`**, which covers the three cases a television can answer: just-works pairing, which BlueZ completes without asking; numeric comparison, which is six digits and an A; and a passkey to type on the *other* device, which is a number to read out. It does not cover `RequestPinCode` and `RequestPasskey`, which want a code typed *into this machine* — those are refused with a sentence saying so. `NoInputNoOutput` would have made them unreachable by forcing every pairing down the just-works path, and would have quietly weakened the ones that could have been confirmed properly.
+
+Pairing is three steps and only the first can fail it: `Pair` is the exchange, `Trusted` is what lets the device reconnect on its own afterwards — without it a pad pairs, works for one evening and is ignored at the next boot — and `Connect` is the convenience. A pairing that completed and then did not connect **is paired**, and the row saying "Paired, not connected" is both true and something A can act on.
+
+### The boundary
+
+Five channels, all pulls, and that is deliberate. The five main → renderer pushes each exist because the renderer cannot know there is anything to ask about; a screen watching a discovery list plainly can. So the Devices screen polls `bluetooth:get` once a second while it is open, main answers out of the mirror, and the bridge does not grow a sixth push for something the renderer already knows it is watching.
+
+**The address is validated twice, in two different ways.** `isBluetoothAddress` checks the shape at the channel, the way `isPowerAction` checks its union — and then `resolveDevice` looks the address up *in the mirror* rather than building `/org/bluez/hci0/dev_AA_BB_…` out of it. So a well-formed address for a device the launcher has never discovered is still refused, and nothing the renderer sends can name a D-Bus object that was not already on the screen.
+
+**Addresses are keys, not content.** They are never drawn — a MAC read at three metres is noise, and two devices with the same name are told apart by the signal meter — and never logged, so every diagnostic here names the device and the operation. `redactSecrets` would replace one with `<mac>` anyway, which is the point: a line built around an address says nothing to the person reading the file a week later.
+
+The screen is a view with no rail item, the only one. B goes back to Settings and the rail keeps Settings marked while it is up, because it behaves like a page of Settings rather than a destination. A seventh rail button was the obvious alternative and does not fit: `NavRail` has no overflow handling, and at 175% interface scale the seven controls already there are taller than a 1080p screen. Pairing a headset is a thing you do twice a year and must not cost a permanent slot in the one piece of chrome that is always on screen.
+
+**The pairing confirmation is a band, not a modal** — the third one would have needed a fourth focus scope and its own `closing`/`EXIT_MS` choreography to say the same thing in the same place, on a screen whose only subject it already is. Leaving the screen *answers* it rather than abandoning it: BlueZ is blocked on that reply, and a pairing left half-open holds the adapter until the daemon times it out.
+
+Signal strength and battery are the only quantitative marks on the page, both in the mono face and neither with a hue — `--status-*` belongs to the status board and the accent belongs to focus, so difference here is weight and fill. Ordering the nearby list by signal is what makes "the device in your hand is at the top" true by construction rather than something the copy has to say. `signalBars` reserves zero for *no reading*, so an empty meter is a device the adapter is not currently hearing, which is a different statement from one tick.
+
+The Flatpak needs one line for all of it — `--system-talk-name=org.bluez` — and it has to be `talk` rather than `see`, because bluetoothd calls **back into the sandbox** on the agent and only `talk` permits that direction.
 
 ## Updating itself
 

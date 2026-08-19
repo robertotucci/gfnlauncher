@@ -1,6 +1,8 @@
 import {
   CHORD_BUTTONS_JOYDEV,
   CHORD_START,
+  KEYBOARD_CHORD_BUTTONS,
+  KEYBOARD_CHORD_HOLD_MS,
   POINTER_ACTIONS_JOYDEV,
   chordHeld,
   heldActions,
@@ -103,6 +105,8 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
   /** Set while `openRemotePointer` is in flight, so a second chord cannot race. */
   let opening = false
   let chord: ChordState = CHORD_START
+  /** The shoulder pair, kept apart from the stick one so neither disarms the other. */
+  let keyboardChord: ChordState = CHORD_START
   let held: readonly PointerActionName[] = []
   let scrollCarry = 0
   let ticker: NodeJS.Timeout | null = null
@@ -164,6 +168,9 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
         // Adopt whatever is held right now, so the buttons that were down
         // during the chord are not read as a click the instant it opens.
         held = heldActions(sample().buttons, POINTER_ACTIONS_JOYDEV)
+        // Unarmed, so the adoption rule applies again: a shoulder already down
+        // as the cursor appears must not count as asking for the keyboard.
+        keyboardChord = CHORD_START
         scrollCarry = 0
         lastTick = Date.now()
         deps.onMode(true)
@@ -210,25 +217,34 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       case 'rightClick':
         remote.button('right', down)
         return
-      case 'toggleKeyboard':
-        if (!down || saidNoKeyboard) return
-        saidNoKeyboard = true
-        // Deliberately absent rather than half-built. Drawing a keyboard over
-        // somebody else's fullscreen window needs a floating surface, and on
-        // Wayland a client cannot place one or keep it from taking the focus —
-        // and the focus is precisely what decides where the keystrokes land, so
-        // a keyboard that steals it types into itself. The on-screen keyboard
-        // therefore lives only in the windows we own, which is also where the
-        // typing actually has to happen: the sign-in form. See README.
-        console.info(
-          'The on-screen keyboard is only available inside the launcher’s own ' +
-            'windows; on the desktop the pad drives the cursor only.'
-        )
-        return
       case 'exit':
         if (down) stop('☰')
         return
     }
+  }
+
+  /**
+   * LB + RB asks for the keyboard, and out here there is not one.
+   *
+   * Deliberately absent rather than half-built, and measured rather than
+   * assumed: an Electron window created with `focusable: false`,
+   * `alwaysOnTop` and `showInactive()` was tried on this compositor and the
+   * focused window lost its focus anyway. The focus is precisely what decides
+   * where `NotifyKeyboardKeysym` lands, so a keyboard drawn that way types into
+   * itself. It therefore lives only in the windows we own — which is also where
+   * the typing actually has to happen, the sign-in form.
+   *
+   * Said once per session rather than per press: this runs off a pad, and the
+   * log is a file somebody has to be able to skim.
+   */
+  const askedForKeyboard = (): void => {
+    if (saidNoKeyboard) return
+    saidNoKeyboard = true
+    console.info(
+      'LB + RB asked for the on-screen keyboard, which exists only inside the ' +
+        'launcher’s own windows — the sign-in page and the web player. Out here ' +
+        'the pad drives the cursor only.'
+    )
   }
 
   const tick = (): void => {
@@ -251,6 +267,18 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       held = actions
       for (const action of edges.up) onAction(action, false)
       for (const action of edges.down) onAction(action, true)
+
+      // Same shoulder pair as in our own windows — LB and RB are 4 and 5 on
+      // joydev too — so the answer is at least consistent, even though out here
+      // the answer is "there is no keyboard".
+      const keyboardStep = stepChord(
+        keyboardChord,
+        chordHeld(current.buttons, KEYBOARD_CHORD_BUTTONS),
+        now,
+        KEYBOARD_CHORD_HOLD_MS
+      )
+      keyboardChord = keyboardStep.next
+      if (keyboardStep.toggle) askedForKeyboard()
 
       moveCursor(current, dt)
       scrollWheel(current, dt)

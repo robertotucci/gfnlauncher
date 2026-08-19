@@ -105,6 +105,29 @@ finish-args:
   - --talk-name=org.freedesktop.PowerManagement
   - --talk-name=org.freedesktop.ScreenSaver
 
+  # ── Pairing a Bluetooth device ──────────────────────────────────────────────
+  # BlueZ (src/main/bluetooth/), and the only name this application needs on the
+  # *system* bus. Everything the Devices screen does — enumerate, discover,
+  # pair, connect, forget, power the adapter — is an ordinary org.bluez call,
+  # the same ones the desktop's own Bluetooth panel makes as the same
+  # unprivileged user. There is no polkit on this path and nothing here is
+  # elevated: BlueZ's shipped D-Bus policy grants `send_destination="org.bluez"`
+  # to the default context, which is why a user session can pair a headset at
+  # all.
+  #
+  # It has to be `talk` rather than `see`, and that is the half worth writing
+  # down: BlueZ does not pair on its own. It hands the interactive part of a
+  # pairing to an *agent* — a D-Bus object this application exports — so
+  # bluetoothd calls **back into the sandbox** while a pairing is running, and
+  # only `talk` permits that direction. With `see` the confirmation never
+  # arrives and the pairing fails with nothing on screen to say why.
+  #
+  # Revoking it is safe and legible: every call answers
+  # org.freedesktop.DBus.Error.AccessDenied, and `describeBluezError` turns that
+  # into the `flatpak override` line that grants it back. Nothing else in the
+  # launcher is affected.
+  - --system-talk-name=org.bluez
+
   # ── Files ───────────────────────────────────────────────────────────────────
   # The GeForce NOW client's own state directory, read-only, for two things.
   #

@@ -8,6 +8,20 @@ Release notes on GitHub and the AppStream `<releases>` block are both generated 
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-19
+
+### Added
+
+- **Bluetooth devices can be paired from the launcher, without leaving it for the desktop.** Settings → Bluetooth devices opens a screen with what you have already paired and what is in the room: scan, press A on a row to pair it, again to connect or disconnect, X to forget. The pairing itself is the system's — the launcher drives BlueZ the same way your desktop's own panel does, so what you pair here works everywhere and survives a restart. What is nearby is ordered by signal strength, so the pad in your hand is at the top, and rows carry a battery figure for the devices that report one.
+
+### Changed
+
+- **The on-screen keyboard is on LB + RB now, not on X.** With a cursor on screen the face buttons read as mouse buttons — A clicks, B right-clicks — and a third one that opened a keyboard instead was a button nobody found. The shoulder pair sits next to the two stick clicks that raise the cursor in the first place, and it both shows and hides. Inside pointer mode the shoulders are free; outside it they still page through genres.
+
+### Fixed
+
+- **A failed update no longer bursts out of its own dialog.** When the notice had to report a refusal it named the command that was run, and that one long line stretched the panel's layout wider than the panel itself — the buttons, the release notes and the message all spilled out past the painted edge and over the library behind it. The command wraps onto a second line now instead of being cut off, so it is both readable and unable to move anything else.
+
 ## [0.1.2] - 2026-08-19
 
 ### Added
@@ -66,6 +80,7 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
+[0.1.3]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.3
 [0.1.2]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.2
 [0.1.1]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.1
 [0.1.0]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.0

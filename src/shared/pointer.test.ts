@@ -4,6 +4,8 @@ import {
   CHORD_BUTTONS_JOYDEV,
   CHORD_HOLD_MS,
   CHORD_START,
+  KEYBOARD_CHORD_BUTTONS,
+  KEYBOARD_CHORD_HOLD_MS,
   MAX_SAMPLE_GAP_MS,
   POINTER_ACTIONS,
   POINTER_ACTIONS_JOYDEV,
@@ -33,12 +35,13 @@ function hold(
     start: number
     until: number
     step?: number
-  }
+  },
+  holdMs?: number
 ): { state: ChordState; toggles: number[] } {
   let state = from
   const toggles: number[] = []
   for (let now = start; now <= until; now += step) {
-    const result = stepChord(state, held, now)
+    const result = stepChord(state, held, now, holdMs)
     state = result.next
     if (result.toggle) toggles.push(now)
   }
@@ -293,12 +296,14 @@ describe('heldActions', () => {
   it('maps the standard layout', () => {
     expect(heldActions([0])).toEqual(['leftClick'])
     expect(heldActions([1])).toEqual(['rightClick'])
-    expect(heldActions([2])).toEqual(['toggleKeyboard'])
     expect(heldActions([9])).toEqual(['exit'])
   })
 
-  it('ignores buttons with no pointer meaning, including the chord itself', () => {
-    expect(heldActions([3, 4, 5, 10, 11, 12])).toEqual([])
+  it('ignores buttons with no pointer meaning, including both chords', () => {
+    // 2 is X, which used to open the keyboard and no longer does; 4 and 5 are
+    // the shoulder pair and 10/11 the stick pair, and a chord must not also
+    // fire as two separate actions.
+    expect(heldActions([2, 3, 4, 5, 10, 11, 12])).toEqual([])
   })
 
   it('deduplicates across two pads holding the same face button', () => {
@@ -309,6 +314,58 @@ describe('heldActions', () => {
     expect(heldActions([9], POINTER_ACTIONS_JOYDEV)).toEqual([])
     expect(heldActions([7], POINTER_ACTIONS_JOYDEV)).toEqual(['exit'])
     expect(POINTER_ACTIONS[9]).toBe('exit')
+  })
+
+  it('leaves the shoulders alone on both numberings', () => {
+    for (const index of KEYBOARD_CHORD_BUTTONS) {
+      expect(POINTER_ACTIONS[index]).toBeUndefined()
+      expect(POINTER_ACTIONS_JOYDEV[index]).toBeUndefined()
+    }
+  })
+})
+
+describe('the keyboard chord', () => {
+  it('is the same two buttons on both interfaces, unlike the stick pair', () => {
+    // LB and RB are 4 and 5 in the W3C mapping and 4 and 5 on joydev. The stick
+    // clicks are not, which is why they need two constants and this needs one.
+    expect(KEYBOARD_CHORD_BUTTONS).toEqual([4, 5])
+    expect(chordHeld([4, 5], KEYBOARD_CHORD_BUTTONS)).toBe(true)
+    expect(chordHeld([4], KEYBOARD_CHORD_BUTTONS)).toBe(false)
+  })
+
+  it('does not collide with the pair that opens pointer mode', () => {
+    expect(chordHeld(CHORD_BUTTONS, KEYBOARD_CHORD_BUTTONS)).toBe(false)
+    expect(chordHeld(KEYBOARD_CHORD_BUTTONS, CHORD_BUTTONS)).toBe(false)
+    expect(chordHeld(KEYBOARD_CHORD_BUTTONS, CHORD_BUTTONS_JOYDEV)).toBe(false)
+  })
+
+  it('fires on the press rather than on a hold', () => {
+    // Nothing else listens to the shoulders inside pointer mode, so there is
+    // nothing to be cautious about and waiting would only feel broken.
+    expect(KEYBOARD_CHORD_HOLD_MS).toBe(0)
+    const step = stepChord(armed(), true, 1_016, KEYBOARD_CHORD_HOLD_MS)
+    expect(step.toggle).toBe(true)
+  })
+
+  it('still fires only once per press', () => {
+    const { toggles } = hold(armed(), { held: true, start: 1_016, until: 3_000 }, KEYBOARD_CHORD_HOLD_MS)
+    expect(toggles).toEqual([1_016])
+  })
+
+  it('still adopts a pair that was already down', () => {
+    const { toggles } = hold(CHORD_START, { held: true, start: 1_000, until: 3_000 }, KEYBOARD_CHORD_HOLD_MS)
+    expect(toggles).toEqual([])
+  })
+
+  it('fires again after a release', () => {
+    const first = stepChord(armed(), true, 1_016, KEYBOARD_CHORD_HOLD_MS)
+    const released = stepChord(first.next, false, 1_032, KEYBOARD_CHORD_HOLD_MS)
+    expect(stepChord(released.next, true, 1_048, KEYBOARD_CHORD_HOLD_MS).toggle).toBe(true)
+  })
+
+  it('leaves the default hold alone for the pair that opens the mode', () => {
+    // The two share `stepChord`, so the default must not have moved with it.
+    expect(stepChord(armed(), true, 1_016).toggle).toBe(false)
   })
 })
 

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
+import type { BluetoothAction } from '@shared/bluetooth'
 import type { ScreenOwnership } from '@shared/input'
 import type {
   GfnClientInfo,
@@ -58,6 +59,18 @@ const api: LauncherApi = {
         ipcRenderer.off(IPC.statusZone, forward)
       }
     }
+  },
+  // Five passthroughs and no subscription, unlike every other live surface
+  // here. The Devices screen knows it is watching a moving list, so it polls
+  // `get()` — which is answered from a model in main that D-Bus signals keep
+  // current, and therefore costs nothing on the bus.
+  bluetooth: {
+    get: () => ipcRenderer.invoke(IPC.bluetoothGet),
+    scan: (on: boolean) => ipcRenderer.invoke(IPC.bluetoothScan, on),
+    power: (on: boolean) => ipcRenderer.invoke(IPC.bluetoothPower, on),
+    act: (action: BluetoothAction, address: string) =>
+      ipcRenderer.invoke(IPC.bluetoothAct, action, address),
+    respond: (accept: boolean) => ipcRenderer.invoke(IPC.bluetoothRespond, accept)
   },
   recent: {
     list: () => ipcRenderer.invoke(IPC.recentList)

@@ -39,6 +39,27 @@ export const IPC = {
    * a stale fetch look like a fresh one.
    */
   statusZone: 'status:zone',
+  /**
+   * Bluetooth, and the five channels that are deliberately all pulls.
+   *
+   * `bluetooth:get` answers out of a model in `src/main/bluetooth/` that D-Bus
+   * signals keep current, so the Devices screen polling it once a second costs
+   * no bus traffic — and the bridge does not grow a sixth main → renderer push
+   * for a list the renderer already knows it is watching. That is the test the
+   * five pushes below pass and this would not.
+   *
+   * Everything crossing here is validated on the main side: `isBluetoothAction`
+   * for the verb, `isBluetoothAddress` for the key, and then the address is
+   * *resolved against main's own model* rather than built into an object path,
+   * so nothing the renderer sends can name a D-Bus object the launcher has not
+   * itself discovered.
+   */
+  bluetoothGet: 'bluetooth:get',
+  bluetoothScan: 'bluetooth:scan',
+  bluetoothPower: 'bluetooth:power',
+  bluetoothAct: 'bluetooth:act',
+  /** Answers the pairing confirmation BlueZ is holding a call open for. */
+  bluetoothRespond: 'bluetooth:respond',
   recentList: 'recent:list',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',

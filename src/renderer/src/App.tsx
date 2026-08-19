@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
+  BluetoothResult,
+  BluetoothSnapshot,
   CatalogSnapshot,
   GameDetails,
   GameStoreOwnership,
@@ -23,6 +25,7 @@ import {
   resolveLaunchTarget
 } from '@shared/games'
 import { accentValue, DEFAULT_ACCENT } from '@shared/theme'
+import type { BluetoothAction } from '@shared/bluetooth'
 import { useGamepad, useIntent } from '@/gamepad/GamepadProvider'
 import { usePadWakeLock } from '@/gamepad/wakeLock'
 import { useSpatialFocus } from '@/focus/SpatialFocus'
@@ -32,6 +35,15 @@ import { GenreStrip } from '@/components/GenreStrip'
 import { GameGrid } from '@/components/GameGrid'
 import { SettingsScreen } from '@/components/SettingsScreen'
 import { StatusScreen } from '@/components/StatusScreen'
+import {
+  ACTION_LABELS,
+  DevicesScreen,
+  DEVICES_CONFIRM_ID,
+  DEVICES_SCAN_ID,
+  deviceFocusId,
+  deviceFor,
+  primaryAction
+} from '@/components/DevicesScreen'
 import { DonateScreen, DONATE_FOCUS_ID } from '@/components/DonateScreen'
 import { SearchOverlay, SEARCH_SCOPE } from '@/components/SearchOverlay'
 import { GameDetailsModal, DETAILS_SCOPE } from '@/components/GameDetailsModal'
@@ -82,6 +94,18 @@ const LAUNCH_NOTICE_MS = 8_000
  * told to do is an appliance that leaves itself half-updated.
  */
 const RESTART_COUNTDOWN_S = 10
+
+/**
+ * How often the Devices screen re-reads the Bluetooth state.
+ *
+ * A poll rather than a subscription, and the bridge has the argument for why:
+ * its five main → renderer channels each exist because the renderer cannot know
+ * there is anything to ask about, and a screen watching a discovery list plainly
+ * can. Main answers out of a model its own D-Bus signals keep current, so this
+ * costs a structured clone and nothing on the bus. It only runs while the screen
+ * is open.
+ */
+const BLUETOOTH_POLL_MS = 1_000
 
 /** "1 store" / "3 stores", so the notice line reads like a sentence. */
 function storeCount(count: number): string {
@@ -193,6 +217,11 @@ export function App(): ReactNode {
   const [status, setStatus] = useState<StatusSnapshot | null>(null)
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusRefreshing, setStatusRefreshing] = useState(false)
+  /** The Bluetooth adapter and what it can see. Null until the screen is opened. */
+  const [bluetooth, setBluetooth] = useState<BluetoothSnapshot | null>(null)
+  const [bluetoothLoading, setBluetoothLoading] = useState(false)
+  /** What the last Bluetooth action had to say. Cleared by the next one. */
+  const [bluetoothNotice, setBluetoothNotice] = useState<string | null>(null)
   const [authenticated, setAuthenticated] = useState(false)
   const [signingIn, setSigningIn] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -419,20 +448,25 @@ export function App(): ReactNode {
           // most useful thing the cursor's first resting place could do here.
           view === 'status'
           ? 'status:refresh'
-          : // The code is the only focusable on the Support screen, so this is
-            // not a preference — without it the chain falls through to a tile
-            // that is not mounted, `focus()` parks the id as pending, and that
-            // gags the focus manager's own recovery for the rest of the session.
-            view === 'support'
-            ? DONATE_FOCUS_ID
-            : // Cycling from the strip itself: follow the selection along the
-              // strip rather than dropping the cursor into the grid mid-flick.
-              focusedIdRef.current?.startsWith('genre:')
-              ? `genre:${genre}`
-              : // Otherwise re-seat the grid. The tile the user was on has
-                // usually just been filtered out, and letting it unregister
-                // unattended hands focus to the nav rail.
-                visibleGames[0] && `tile:${visibleGames[0].cmsId}`
+          : // Same rule on Devices: looking for something is why the screen was
+            // opened, and Scan is the only control that is always there.
+            view === 'devices'
+            ? DEVICES_SCAN_ID
+            : // The code is the only focusable on the Support screen, so this
+              // is not a preference — without it the chain falls through to a
+              // tile that is not mounted, `focus()` parks the id as pending,
+              // and that gags the focus manager's own recovery for the rest of
+              // the session.
+              view === 'support'
+              ? DONATE_FOCUS_ID
+              : // Cycling from the strip itself: follow the selection along the
+                // strip rather than dropping the cursor into the grid mid-flick.
+                focusedIdRef.current?.startsWith('genre:')
+                ? `genre:${genre}`
+                : // Otherwise re-seat the grid. The tile the user was on has
+                  // usually just been filtered out, and letting it unregister
+                  // unattended hands focus to the nav rail.
+                  visibleGames[0] && `tile:${visibleGames[0].cmsId}`
     // Recorded only once there is somewhere to go. On the very first paint the
     // grid is still empty, and marking the landing done there would mean focus
     // never moves off the nav rail when the catalog finally arrives.
@@ -939,6 +973,9 @@ export function App(): ReactNode {
         else if (shotsOpen) closeShots()
         else if (detailsOpen) closeDetails()
         else if (searchOpen) closeSearch()
+        // Devices is a page of Settings rather than a destination, so B goes
+        // back the way the user came in. Everywhere else B means "the library".
+        else if (view === 'devices') setView('settings')
         else if (view !== 'library') setView('library')
         break
       case 'search':
@@ -947,6 +984,13 @@ export function App(): ReactNode {
         // it carries the one action the face buttons had no room for.
         if (detailsOpen) {
           toggleOwnedForFocus()
+          break
+        }
+        // Same reasoning one screen over: there is nothing to search on the
+        // Devices screen, and forgetting a device is the action A had no room
+        // for. Inert unless the cursor is on a paired row.
+        if (view === 'devices') {
+          forgetFocusedDevice()
           break
         }
         if (searchOpen) closeSearch()
@@ -980,6 +1024,7 @@ export function App(): ReactNode {
           view !== 'settings' &&
           view !== 'status' &&
           view !== 'recent' &&
+          view !== 'devices' &&
           view !== 'support'
         ) {
           setGenre((current) => cycleGenre(genreFacets, current, step, rtxCount))
@@ -1063,6 +1108,126 @@ export function App(): ReactNode {
       .catch((error: unknown) => console.error('The status board could not be read:', error))
       .finally(() => setStatusLoading(false))
   }, [view])
+
+  /**
+   * The Bluetooth snapshot, readable from a cleanup with no dependency on it.
+   *
+   * Leaving the Devices screen has two things to undo — a running scan and a
+   * confirmation BlueZ is holding a `Pair` call open for — and the effect that
+   * has to undo them keys on `view` alone. Depending on the snapshot as well
+   * would tear the poll down and rebuild it every second.
+   */
+  const bluetoothRef = useRef<BluetoothSnapshot | null>(null)
+  bluetoothRef.current = bluetooth
+
+  /**
+   * Reads the adapter for as long as the screen is up.
+   *
+   * A poll, deliberately — see `BLUETOOTH_POLL_MS`. It also covers the changes
+   * that are nobody's press: a headset switched off across the room, a pad
+   * whose battery moved, a device BlueZ evicted after the scan stopped.
+   */
+  useEffect(() => {
+    if (view !== 'devices') return
+    // Guarded like the status effect: this runs during the commit that switches
+    // to the view, so with no bridge it would take the whole interface down
+    // rather than leaving an empty screen behind the footer's report of why.
+    if (!window.launcher) return
+
+    let live = true
+    const read = (): void => {
+      void window.launcher.bluetooth
+        .get()
+        .then((next) => {
+          if (!live) return
+          setBluetooth(next)
+          setBluetoothLoading(false)
+        })
+        .catch((error: unknown) => console.error('Bluetooth state could not be read:', error))
+    }
+
+    setBluetoothLoading(true)
+    read()
+    const timer = window.setInterval(read, BLUETOOTH_POLL_MS)
+
+    return () => {
+      live = false
+      window.clearInterval(timer)
+      const last = bluetoothRef.current
+      // Answered rather than abandoned: BlueZ is blocked on that reply, and a
+      // pairing left half-open holds the adapter until the daemon times it out.
+      if (last?.request?.kind === 'confirm') void window.launcher.bluetooth.respond(false)
+      // The sixty-second timeout in main would get here eventually. Leaving the
+      // screen is a clearer statement than a timer, and it is what stops the
+      // radio scanning behind a game.
+      if (last?.scanning) void window.launcher.bluetooth.scan(false)
+    }
+  }, [view])
+
+  /**
+   * Runs one Bluetooth action and folds the answer back in.
+   *
+   * Every one of them answers with the snapshot after the fact, so the screen
+   * never has to wait a poll to catch up with a press — the same bargain
+   * `StoreMutationResult` makes by carrying the patched game.
+   */
+  const runBluetooth = useCallback(async (run: () => Promise<BluetoothResult>) => {
+    setBluetoothNotice(null)
+    try {
+      const result = await run()
+      setBluetooth(result.snapshot)
+      setBluetoothLoading(false)
+      if (!result.ok) setBluetoothNotice(result.error ?? 'BlueZ refused the request.')
+    } catch (error) {
+      // These channels answer with a result rather than throwing, so reaching
+      // here means the bridge did. Caught because the alternative is a row that
+      // spins and never says anything.
+      console.error('Bluetooth request failed:', error)
+      setBluetoothNotice('The launcher could not reach its own main process.')
+    }
+  }, [])
+
+  /**
+   * The confirmation takes the cursor, and gives it back.
+   *
+   * Keyed on the address rather than on the request object, which changes
+   * identity on every poll. The band is two focusables inside the screen's own
+   * scope, so there is nothing to restore beyond putting the cursor back on the
+   * row the pairing started from — without which it would land wherever the
+   * focus manager recovers to, which is the top of the screen.
+   */
+  const pendingConfirm =
+    bluetooth?.request?.kind === 'confirm' ? bluetooth.request.address : null
+  const confirmOrigin = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (view !== 'devices') return
+    if (pendingConfirm) {
+      confirmOrigin.current = pendingConfirm
+      const timer = window.setTimeout(() => focus(DEVICES_CONFIRM_ID), 0)
+      return () => window.clearTimeout(timer)
+    }
+    const origin = confirmOrigin.current
+    if (!origin) return
+    confirmOrigin.current = null
+    const timer = window.setTimeout(() => focus(deviceFocusId(origin)), 0)
+    return () => window.clearTimeout(timer)
+  }, [view, pendingConfirm, focus])
+
+  /** The device under the cursor, for the legend and for X. */
+  const focusedDevice = useMemo(() => deviceFor(bluetooth, focusedId), [bluetooth, focusedId])
+
+  /**
+   * Forgets the device under the cursor.
+   *
+   * On X rather than a button of its own, the same repurposing the details
+   * panel makes for "mark owned": A is already the row's own action, and a
+   * second control inside the row is the nesting that is not allowed here.
+   */
+  const forgetFocusedDevice = useCallback(() => {
+    if (!focusedDevice?.paired) return
+    void runBluetooth(() => window.launcher.bluetooth.act('forget', focusedDevice.address))
+  }, [focusedDevice, runBluetooth])
 
   /**
    * Asks every linked store to resync, then reloads what came of it.
@@ -1376,6 +1541,29 @@ export function App(): ReactNode {
                 { action: 'back', label: 'Back' },
                 { action: 'menu', label: 'Settings' }
               ]
+            : view === 'devices'
+              ? [
+                  // A means whatever the row under the cursor is for, and the
+                  // legend has to say the same word the press will do — which
+                  // is why `primaryAction` is read here as well as in the row.
+                  {
+                    action: 'confirm',
+                    label: focusedDevice
+                      ? ACTION_LABELS[primaryAction(focusedDevice)]
+                      : focusedId === DEVICES_SCAN_ID && bluetooth?.scanning
+                        ? 'Stop scanning'
+                        : 'Select'
+                  },
+                  // Only on a row where there is something to forget. X is
+                  // inert on the scan control and on a device that is merely
+                  // nearby, and a legend naming a button that does nothing is
+                  // worse than a shorter legend.
+                  ...(focusedDevice?.paired
+                    ? [{ action: 'search' as const, label: 'Forget' }]
+                    : []),
+                  { action: 'back', label: 'Back' },
+                  { action: 'menu', label: 'Settings' }
+                ]
             : view === 'settings'
               ? [
                   { action: 'confirm', label: 'Toggle' },
@@ -1464,6 +1652,7 @@ export function App(): ReactNode {
                 appVersion={update?.currentVersion ?? null}
                 logPath={logPath}
                 onUpdate={updateSettings}
+                onOpenDevices={() => setView('devices')}
                 onRefreshCatalog={refreshCatalog}
                 onSyncAll={() => void syncAllStores()}
                 onOpenGfn={() => void openGfnApp()}
@@ -1475,6 +1664,23 @@ export function App(): ReactNode {
                 }}
               />
             </>
+          ) : view === 'devices' ? (
+            // Renders its own header for the reason Status does: the scan
+            // control belongs on the same row as the title.
+            <DevicesScreen
+              snapshot={bluetooth}
+              loading={bluetoothLoading}
+              scope={ROOT_SCOPE}
+              notice={bluetoothNotice}
+              onScan={(on) => void runBluetooth(() => window.launcher.bluetooth.scan(on))}
+              onPower={(on) => void runBluetooth(() => window.launcher.bluetooth.power(on))}
+              onAct={(action: BluetoothAction, address) =>
+                void runBluetooth(() => window.launcher.bluetooth.act(action, address))
+              }
+              onRespond={(accept) =>
+                void runBluetooth(() => window.launcher.bluetooth.respond(accept))
+              }
+            />
           ) : view === 'support' ? (
             // Owns its header too, for a different reason than Status does: the
             // page is a centred plate, and the header is the only part of it

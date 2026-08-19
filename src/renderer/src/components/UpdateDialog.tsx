@@ -316,7 +316,11 @@ export function UpdateDialog({
                     label="github.com/releases"
                     size="size-[10rem]"
                   />
-                  <p className="text-muted-foreground text-sm leading-snug">
+                  {/* `min-w-0` and `break-words` for the reason the failure
+                      row below documents: the QR is `shrink-0`, and the
+                      not-writable refusal opens with the AppImage's own path,
+                      which has no spaces in it to break at. */}
+                  <p className="text-muted-foreground min-w-0 text-sm leading-snug break-words">
                     {status.blockedReason}
                   </p>
                 </div>
@@ -335,14 +339,30 @@ export function UpdateDialog({
         )}
 
         {/* A refusal has to be readable, and it has to name the command: this
-            is the same contract the power dialog keeps with polkit. */}
+            is the same contract the power dialog keeps with polkit.
+
+            Both classes here are load-bearing, and for the same reason.
+            `DialogContent` is a *grid*, so its one column is at least as wide
+            as the widest child's min-content — and a `truncate` sets
+            `white-space: nowrap`, whose min-content is the entire command.
+            `flatpak-spawn --host -- flatpak update --assumeyes io.github…`
+            therefore stretched the column past `sm:max-w-lg` and pushed every
+            row in the dialog, the buttons included, out through the panel's
+            painted edge. `min-w-0` takes the automatic minimum size off this
+            row so nothing inside it can widen the dialog again, and the
+            command wraps instead of truncating — a command cut off halfway is
+            not a command that has been named. `break-all` because it is one
+            long mono string with nowhere natural to break, the same call
+            `SettingsScreen` makes for the log path. `break-words` on the
+            message above it for the same hazard: the AppImage branch builds
+            its refusal around a filesystem path. */}
         {failed && !applying && (
-          <div className="flex items-start gap-3">
+          <div className="flex min-w-0 items-start gap-3">
             <TriangleAlert className="text-foreground mt-0.5 size-4 shrink-0" aria-hidden />
             <div className="min-w-0">
-              <p className="text-sm">{result?.error}</p>
+              <p className="text-sm break-words">{result?.error}</p>
               {result?.command && (
-                <p className="text-muted-foreground mt-1 truncate font-mono text-xs">
+                <p className="text-muted-foreground mt-1 font-mono text-xs break-all">
                   {result.command}
                 </p>
               )}

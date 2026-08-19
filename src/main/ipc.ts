@@ -1,9 +1,12 @@
 import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
 import { DONATION_URL } from '@shared/donate'
+import { isBluetoothAction, isBluetoothAddress } from '@shared/bluetooth'
 import type {
   AuthResult,
   AuthStatus,
+  BluetoothResult,
+  BluetoothSnapshot,
   CatalogSnapshot,
   Diagnostics,
   GameDetails,
@@ -23,6 +26,7 @@ import type {
 } from '@shared/types'
 import { resolveLaunchPath } from '@shared/games'
 import { isPowerAction, runPowerAction } from './power'
+import { act, getBluetooth, respondToPairing, setPowered, setScan } from './bluetooth'
 import { createDisplayWakeLock } from './displaySleep'
 import { IS_SANDBOXED } from './host'
 import { logFilePath } from './log'
@@ -452,6 +456,61 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // an unreachable status page must not cost the whole screen.
   ipcMain.handle(IPC.statusGet, async (): Promise<StatusSnapshot> => getStatus())
   ipcMain.handle(IPC.statusRefresh, async (): Promise<StatusSnapshot> => refreshStatus())
+
+  /**
+   * Bluetooth. Five pulls, no push — see the note on these channels in
+   * `@shared/ipc` for why the Devices screen polls rather than subscribing.
+   *
+   * None of them throws. An unusable adapter, a stopped daemon and a sandbox
+   * that was refused the bus all arrive as a snapshot carrying `error`, which
+   * is the same posture `status:get` takes: half a screen with a sentence on it
+   * beats a rejected promise the renderer does not model.
+   */
+  ipcMain.handle(IPC.bluetoothGet, async (): Promise<BluetoothSnapshot> => getBluetooth())
+
+  ipcMain.handle(
+    IPC.bluetoothScan,
+    async (_event, on: unknown): Promise<BluetoothResult> => setScan(on === true)
+  )
+
+  ipcMain.handle(
+    IPC.bluetoothPower,
+    async (_event, on: unknown): Promise<BluetoothResult> => setPowered(on === true)
+  )
+
+  ipcMain.handle(
+    IPC.bluetoothAct,
+    async (_event, action: unknown, address: unknown): Promise<BluetoothResult> => {
+      // Both halves validated before either becomes a D-Bus call, the same way
+      // `app:power` guards its union. The address is checked for *shape* here
+      // and then resolved against main's own mirror in `act`, so a well-formed
+      // address for a device the launcher has never seen is still refused.
+      if (!isBluetoothAction(action)) {
+        console.error(`Refused an unknown Bluetooth action from the renderer: ${String(action)}`)
+        return {
+          ok: false,
+          error: `Unknown Bluetooth action: ${String(action)}`,
+          snapshot: await getBluetooth()
+        }
+      }
+      if (!isBluetoothAddress(address)) {
+        // The address itself is not echoed: `redactSecrets` would take it out
+        // of the log anyway, and repeating a malformed one back adds nothing.
+        console.error(`Refused a malformed Bluetooth address from the renderer (${action}).`)
+        return {
+          ok: false,
+          error: 'Malformed device address',
+          snapshot: await getBluetooth()
+        }
+      }
+      return act(action, address)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.bluetoothRespond,
+    async (_event, accept: unknown): Promise<BluetoothResult> => respondToPairing(accept === true)
+  )
 
   ipcMain.handle(IPC.recentList, async (): Promise<string[]> => listRecent())
 

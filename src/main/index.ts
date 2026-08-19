@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icons/512x512.png?asset'
+import { disarmBluetooth } from './bluetooth'
 import { armClientWatch, disarmClientWatch } from './clientWatch'
 import { disarmHandback } from './gfn/handback'
 import { FLATPAK_ID, IS_SANDBOXED } from './host'
@@ -120,6 +121,12 @@ function start(): void {
     // Both have to go back explicitly; the second one especially, because a
     // stray virtual pointer outliving the launcher is not our bug to notice.
     disarmPointerMode()
+    // Same argument one bus over: a discovery reference this process still
+    // holds is a radio the next application finds busy, and a pairing agent
+    // left exported would go on answering for a launcher that is gone. A no-op
+    // unless somebody opened the Devices screen — nothing here is armed at
+    // startup.
+    disarmBluetooth()
   })
 
   app.on('window-all-closed', () => {
