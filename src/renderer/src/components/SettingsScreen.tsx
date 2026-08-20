@@ -652,12 +652,12 @@ export function SettingsScreen({
           <ActionRow
             id="setting:devices"
             scope={scope}
-            label="Bluetooth devices"
+            label="Controllers and Bluetooth"
             // Says what it is for before what it is, because the reason
             // somebody is reading this row is that something in the room has
             // stopped working. The second sentence is the promise that matters:
             // this is the system's pairing, not a copy of it.
-            description="Pair a gamepad, a headset or a keyboard, and reconnect one you have paired before. Pairing is done by the system, so it holds outside the launcher too."
+            description="See the controllers the launcher can find, and pair a gamepad, a headset or a keyboard. Pairing is done by the system, so it holds outside the launcher too."
             icon={Bluetooth}
             onConfirm={onOpenDevices}
           />

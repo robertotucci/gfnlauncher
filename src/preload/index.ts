@@ -112,6 +112,7 @@ const api: LauncherApi = {
     // for and no failure the renderer could act on, and a promise nobody awaits
     // is a worse description of that than a send.
     padActivity: () => ipcRenderer.send(IPC.appPadActivity),
+    padList: () => ipcRenderer.invoke(IPC.padList),
     diagnostics: () => ipcRenderer.invoke(IPC.appDiagnostics),
     /** Written out the long way for the reasons on `update.onProgress` above. */
     onScreen: (listener: (screen: ScreenOwnership) => void) => {

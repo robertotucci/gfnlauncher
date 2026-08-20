@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { PAD_FAMILIES } from './padFamily'
 import {
   COMPOSE_CURSOR_START,
   COMPOSE_DISPLAY,
-  COMPOSE_SHORTCUTS,
   DEFAULT_LAYOUT_ID,
   buildComposeLayout,
   clampComposeCursor,
@@ -11,6 +11,7 @@ import {
   composeLayoutFor,
   composeLayouts,
   composeRows,
+  composeShortcuts,
   isComposeFunctionKey,
   missingPrintableAscii,
   moveComposeSelection
@@ -242,15 +243,19 @@ describe('clampComposeCursor', () => {
   })
 })
 
-describe('COMPOSE_SHORTCUTS', () => {
-  it('names only keys the layout actually draws', () => {
+describe('composeShortcuts', () => {
+  it('names only keys the layout actually draws, on every pad', () => {
     // The glyph is printed on the keycap, so a badge that outlives its key is a
     // pad button advertised on nothing — or, worse, silently gone from a
-    // keyboard whose user has learnt it.
-    for (const layout of [american, italian]) {
-      const buttons = composeButtons(layout)
-      for (const button of Object.keys(COMPOSE_SHORTCUTS)) {
-        expect(buttons.has(button), `${button} on ${layout.id}`).toBe(true)
+    // keyboard whose user has learnt it. Looped over the families because the
+    // badges are a function of the pad now: a row that only held for Xbox would
+    // be a keyboard that lies to everyone else.
+    for (const family of PAD_FAMILIES) {
+      for (const layout of [american, italian]) {
+        const buttons = composeButtons(layout)
+        for (const button of Object.keys(composeShortcuts(family))) {
+          expect(buttons.has(button), `${button} on ${layout.id}`).toBe(true)
+        }
       }
     }
   })
@@ -258,8 +263,10 @@ describe('COMPOSE_SHORTCUTS', () => {
   it('names only function keys', () => {
     // A shortcut onto a character key would be a second way to type one letter
     // and no way to type the rest, which is not a shortcut, it is a surprise.
-    for (const button of Object.keys(COMPOSE_SHORTCUTS)) {
-      expect(isComposeFunctionKey(button), button).toBe(true)
+    for (const family of PAD_FAMILIES) {
+      for (const button of Object.keys(composeShortcuts(family))) {
+        expect(isComposeFunctionKey(button), button).toBe(true)
+      }
     }
   })
 
@@ -268,13 +275,24 @@ describe('COMPOSE_SHORTCUTS', () => {
     // stamping that on ninety keycaps would say nothing while making the
     // legends unreadable. Shift is here because the shoulders are the chord
     // that closes the keyboard and the face buttons are spent.
-    expect(COMPOSE_SHORTCUTS['{shift}']).toBeUndefined()
-    expect(COMPOSE_SHORTCUTS['a']).toBeUndefined()
+    expect(composeShortcuts('xbox')['{shift}']).toBeUndefined()
+    expect(composeShortcuts('xbox')['a']).toBeUndefined()
   })
 
   it('badges a key that has a label to sit beside', () => {
-    for (const button of Object.keys(COMPOSE_SHORTCUTS)) {
+    for (const button of Object.keys(composeShortcuts('playstation'))) {
       expect(COMPOSE_DISPLAY[button], button).toBeDefined()
     }
+  })
+
+  it('speaks the language of the pad in hand', () => {
+    // The bug: a DualSense was told to press X for a space and Y to send, and
+    // it has neither. These are positional — the left-hand face button and the
+    // top one — so the letters change and the fingers do not.
+    expect(composeShortcuts('xbox')['{space}']).toBe('X')
+    expect(composeShortcuts('playstation')['{space}']).toBe('□')
+    expect(composeShortcuts('nintendo')['{space}']).toBe('Y')
+    expect(composeShortcuts('nintendo')['{enter}']).toBe('X')
+    expect(composeShortcuts('nintendo')['{close}']).toBe('+')
   })
 })

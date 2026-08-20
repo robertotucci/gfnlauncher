@@ -70,6 +70,32 @@ sudo udevadm trigger --subsystem-match=usb --action=add
 
 Re-run the loop from step 1: the device should now read `wakeup=enabled`.
 
+## 2a. Dongles and Bluetooth, which are where this usually fails
+
+**The rule matches the dongle, not the pad.** With an Xbox Wireless Adapter, an
+8BitDo receiver or any other 2.4 GHz dongle, the pad itself is not a USB device
+at all — the receiver is, and `lsusb` shows the *receiver's* ids. A rule written
+against the ids printed on the controller's box matches nothing, fires never,
+and gives no error to say so. Use the ids the loop in step 1 prints while the
+receiver is plugged in and the pad is switched off; that is the line that
+matters.
+
+**Bluetooth wakes through the host controller, not through the pad.** There is
+no `power/wakeup` on a Bluetooth gamepad to enable: the pad is a HID device on a
+link the *adapter* owns. If the adapter is USB-attached — most are, including
+the ones soldered to a laptop mainboard — the same `SUBSYSTEM=="usb"` rule
+applies to *its* ids, and this says whether it is armed already:
+
+```bash
+cat /sys/class/bluetooth/hci0/device/power/wakeup
+```
+
+Expect it to be enabled and the machine still not to wake. For that to work, the
+pad has to send an HID reconnect while the radio is in D3, and most stacks tear
+the link down on suspend and bring the adapter back up with a fresh scan
+instead. It is worth ten minutes and not worth an evening: if a wired pad or a
+dongle is an option, that is the path that reliably works.
+
 ## 3. If it still does not wake
 
 Check that the USB controller itself is armed:

@@ -94,6 +94,19 @@ export const IPC = {
   appOpenDonation: 'app:openDonation',
   appPadActivity: 'app:padActivity',
   /**
+   * What each connected controller says about itself.
+   *
+   * A **pull**, and it passes the test the five pushes had to pass in reverse:
+   * the renderer plainly knows there is something to ask about, because it is
+   * the thing holding the `Gamepad` whose `mapping` came back empty. So it asks
+   * once per hot-plug rather than being told sixty times a second.
+   *
+   * What comes back is `PadProfile[]` — the numbering the *kernel* gives each
+   * pad, which is what the browser is reporting whenever it has no standard
+   * mapping of its own. See `@shared/padLayout`.
+   */
+  padList: 'pad:list',
+  /**
    * Pointer mode, and the only channel here that is **not** on the bridge.
    *
    * It runs preload → main from `src/preload/pointer.ts`, which is mounted on

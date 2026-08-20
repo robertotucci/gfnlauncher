@@ -15,6 +15,9 @@ import {
 } from 'lucide-react'
 import type { BluetoothDevice, BluetoothKind, BluetoothSnapshot } from '@shared/types'
 import { signalBars, type BluetoothAction } from '@shared/bluetooth'
+import type { PadFamily } from '@shared/padFamily'
+import type { PadTransport } from '@shared/padLayout'
+import type { PadInfo, PadNumbering } from '@/gamepad/translate'
 import { useFocusable } from '@/focus/SpatialFocus'
 import { SectionRule } from '@/components/SectionRule'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -219,6 +222,66 @@ function DeviceRow({
   )
 }
 
+const FAMILY_LABELS: Record<PadFamily, string> = {
+  xbox: 'Xbox',
+  playstation: 'PlayStation',
+  nintendo: 'Nintendo'
+}
+
+const TRANSPORT_LABELS: Record<PadTransport, string> = {
+  usb: 'USB',
+  bluetooth: 'Bluetooth',
+  other: ''
+}
+
+/**
+ * How the pad is being read, in the two cases where that is worth saying.
+ *
+ * Not four sentences: `standard` is the ordinary case and printing "normal" on
+ * every row would bury the one row that is not. `assumed` is the whole reason
+ * this section exists on a screen rather than only in the log — it is the fact
+ * that explains a controller behaving oddly, and it was previously only
+ * findable by someone who knew to grep for it.
+ */
+const NUMBERING_NOTES: Record<PadNumbering, string | null> = {
+  standard: null,
+  kernel: 'read with this pad’s own button numbering',
+  assumed: 'button layout guessed, so some buttons may be wrong',
+  ignored: 'not a controller, so the launcher does not read it'
+}
+
+/**
+ * One connected controller.
+ *
+ * **Not focusable, and that is the design.** There is nothing to press: this is
+ * the answer to "is the launcher seeing my pad, and how", which is a question
+ * with no action attached. Registering it would put four unpressable stops in
+ * the cursor's path on the way to the rows that do something.
+ */
+function PadRow({ pad }: { pad: PadInfo }): ReactNode {
+  const note = NUMBERING_NOTES[pad.numbering]
+  const transport = TRANSPORT_LABELS[pad.transport]
+
+  return (
+    <div className="flex w-full items-center gap-4 rounded-md px-4 py-3.5 text-left">
+      <Gamepad2 className="text-muted-foreground size-5 shrink-0" />
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{pad.name}</span>
+        <span className="text-muted-foreground mt-0.5 block text-xs">
+          {pad.numbering === 'ignored'
+            ? note
+            : [`${FAMILY_LABELS[pad.family]} buttons`, note].filter(Boolean).join(' · ')}
+        </span>
+      </span>
+
+      {transport && (
+        <span className="text-muted-foreground shrink-0 font-mono text-xs">{transport}</span>
+      )}
+    </div>
+  )
+}
+
 /** A row that is a control rather than a device — "Turn Bluetooth on". */
 function ActionRow({
   id,
@@ -367,6 +430,7 @@ function Notice({ children }: { children: ReactNode }): ReactNode {
 
 export function DevicesScreen({
   snapshot,
+  pads,
   loading,
   scope,
   notice,
@@ -376,6 +440,15 @@ export function DevicesScreen({
   onRespond
 }: {
   snapshot: BluetoothSnapshot | null
+  /**
+   * The controllers connected right now, however they are attached.
+   *
+   * Not Bluetooth, and that is why it is a separate prop: a pad on a cable is
+   * every bit as much "a device on this machine" as a paired headset, and the
+   * question this section answers — is the launcher seeing it, and is it
+   * reading it properly — is the same question for both.
+   */
+  pads: readonly PadInfo[]
   /** True until the first answer arrives; after that the screen never blanks. */
   loading: boolean
   scope: string
@@ -394,7 +467,7 @@ export function DevicesScreen({
       <header className="flex shrink-0 items-end justify-between gap-8 px-10 pt-8 pb-6">
         <div>
           <p className="text-muted-foreground text-xs font-medium tracking-widest uppercase">
-            Bluetooth
+            Controllers and Bluetooth
           </p>
           <h1 className="mt-3 text-[clamp(1.9rem,3.4vw,2.75rem)] leading-none font-semibold tracking-tight">
             Devices
@@ -430,6 +503,20 @@ export function DevicesScreen({
           {/* A failed action, under the nameplate rather than in it: this is a
               fact about one press, not about the adapter. */}
           {notice && <p className="text-destructive px-4 text-xs">{notice}</p>}
+
+          {/* Above everything Bluetooth, and outside the branches below it: a
+              pad on a cable has nothing to do with the adapter, and on a
+              machine with no radio at all this is the only section there is.
+              Absent when there is none — an empty controller list on a screen
+              about pairing says nothing anybody needed to read. */}
+          {pads.length > 0 && (
+            <section className="flex flex-col gap-2">
+              <SectionRule label="Controllers" count={countLabel(pads.length, 'pad')} />
+              {pads.map((pad) => (
+                <PadRow key={pad.id} pad={pad} />
+              ))}
+            </section>
+          )}
 
           {loading && !snapshot ? (
             <>

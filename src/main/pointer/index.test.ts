@@ -38,7 +38,13 @@ const { DEFAULT_SETTINGS } = await import('@shared/types')
 function restore(active: boolean): { channel: string; payload: unknown } {
   return {
     channel: IPC.pointerRestore,
-    payload: { active, accent: 'oklch(0.985 0 0)', scale: 1 }
+    // `pads` and `family` ride the same message for the same reason and are
+    // spelt out for the same reason: the preload reads the pad through the
+    // browser, which hands it the kernel's own numbering for any controller
+    // Chromium has no table for. Empty and `xbox` here because the suite runs
+    // on a machine with no `/sys/class/input` — which is itself the fallback
+    // this feature has to survive, and does.
+    payload: { active, accent: 'oklch(0.985 0 0)', scale: 1, pads: [], family: 'xbox' }
   }
 }
 
@@ -310,7 +316,13 @@ describe('the mode, and the way out of it', () => {
     expect(target.pushed).toEqual([
       {
         channel: IPC.pointerRestore,
-        payload: { active: false, accent: 'oklch(0.86 0.13 165)', scale: 1.3 }
+        payload: {
+          active: false,
+          accent: 'oklch(0.86 0.13 165)',
+          scale: 1.3,
+          pads: [],
+          family: 'xbox'
+        }
       }
     ])
   })

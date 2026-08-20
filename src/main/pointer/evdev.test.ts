@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   CHORD_BUTTONS_EVDEV,
-  EV_ABS,
-  EV_KEY,
   JS_AXIS_RANGE,
   JS_EVENT_AXIS,
   JS_EVENT_BUTTON,
@@ -11,18 +9,16 @@ import {
   KEYBOARD_CHORD_BUTTONS_EVDEV,
   PAD_SAMPLE_EMPTY,
   POINTER_ACTIONS_EVDEV,
-  XPAD_LAYOUT,
   applyJsEvents,
-  joydevLayout,
   mergePadReadings,
   normaliseAxis,
-  parseCapabilityBitmap,
   parseJsEvents,
   readPad,
-  type PadLayout,
   type PadSample
 } from './evdev'
 import { CHORD_BUTTONS, KEYBOARD_CHORD_BUTTONS, chordHeld, heldActions } from '@shared/pointer'
+import { EV_ABS, EV_KEY, joydevLayout, type PadLayout } from '@shared/padLayout'
+import { DUALSENSE, XBOX_BLUETOOTH, XPAD_USB } from '@shared/padFixtures'
 
 /** Builds one `struct js_event` exactly as the kernel writes it. */
 function jsEvent({
@@ -180,155 +176,21 @@ describe('applyJsEvents', () => {
 })
 
 
-// ── The layout, which is the part that was wrong ────────────────────────────
+// ── Translating one device's numbering, which is the part that was wrong ────
 
 /**
- * The three pads this has to get right, as the kernel declares them.
- *
- * Codes rather than printed bitmaps, because the ordering is what is under
- * test; `parseCapabilityBitmap` gets the real strings below.
+ * The orderings themselves are pinned in `@shared/padLayout.test.ts`, next to
+ * the code that produces them; the fixtures are shared because both suites need
+ * the same real pads. What is under test here is the reader on top of them.
  */
-const XPAD_USB = {
-  keys: [
-    EV_KEY.a,
-    EV_KEY.b,
-    EV_KEY.x,
-    EV_KEY.y,
-    EV_KEY.lb,
-    EV_KEY.rb,
-    EV_KEY.select,
-    EV_KEY.start,
-    EV_KEY.mode,
-    EV_KEY.l3,
-    EV_KEY.r3
-  ],
-  abs: [EV_ABS.x, EV_ABS.y, EV_ABS.z, EV_ABS.rx, EV_ABS.ry, EV_ABS.rz, EV_ABS.hat0x, EV_ABS.hat0y]
-}
-
-/**
- * The same pad over Bluetooth, on `hid-microsoft`. Read off a real one:
- * `/sys/class/input/js0/device/capabilities/key` = `7fff000000000000 0
- * 8000000000 0 0`. It declares the four codes xpad leaves out — BTN_C, BTN_Z,
- * BTN_TL2, BTN_TR2 — and every one of them shifts the stick clicks along.
- */
-const XBOX_BLUETOOTH = {
-  keys: [0x130, 0x131, 0x132, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x139, 0x13a, 0x13b, 0x13c, 0x13d, 0x13e],
-  // ABS_GAS and ABS_BRAKE are the triggers here, and ABS_RX/ABS_RY are absent
-  // entirely: the right stick is on ABS_Z and ABS_RZ.
-  abs: [EV_ABS.x, EV_ABS.y, EV_ABS.z, EV_ABS.rz, 0x09, 0x0a, EV_ABS.hat0x, EV_ABS.hat0y]
-}
-
-/** A DualSense on `hid-playstation`, which puts its d-pad on four buttons. */
-const DUALSENSE = {
-  keys: [0x130, 0x131, 0x133, 0x134, 0x136, 0x137, 0x138, 0x139, 0x13a, 0x13b, 0x13c, 0x13d, 0x13e, 0x220, 0x221, 0x222, 0x223],
-  abs: [EV_ABS.x, EV_ABS.y, EV_ABS.z, EV_ABS.rx, EV_ABS.ry, EV_ABS.rz]
-}
-
-const layoutOf = (pad: { keys: number[]; abs: number[] }): PadLayout =>
+const layoutOf = (pad: { keys: readonly number[]; abs: readonly number[] }): PadLayout =>
   joydevLayout(pad.keys, pad.abs)
 
-describe('parseCapabilityBitmap', () => {
-  it('reads the bitmap a real Xbox pad publishes over Bluetooth', () => {
-    // Every gamepad button from BTN_A to BTN_THUMBR, plus KEY_RECORD — the
-    // Share button — three words further down. That second one is the
-    // assertion that matters: it can only be found if the words are indexed
-    // from the end, which is the only position the format pins.
-    const bits = parseCapabilityBitmap('7fff000000000000 0 8000000000 0 0')
-
-    expect(bits.has(EV_KEY.a)).toBe(true)
-    expect(bits.has(EV_KEY.l3)).toBe(true)
-    expect(bits.has(EV_KEY.r3)).toBe(true)
-    expect(bits.has(0x13f)).toBe(false)
-    expect(bits.has(0xa7)).toBe(true)
-  })
-
-  it('reads the axes of the same pad', () => {
-    expect([...parseCapabilityBitmap('30627')].sort((a, b) => a - b)).toEqual([
-      0, 1, 2, 5, 9, 10, 16, 17
-    ])
-  })
-
-  it('does not assume the words are padded, because the kernel does not pad them', () => {
-    // `%lx` with no width, so a word of one is "1" and a word of zero is "0".
-    // Reading these left to right would put that bit at 0 rather than at 128.
-    const bits = parseCapabilityBitmap('1 0 0')
-    expect([...bits]).toEqual([128])
-  })
-
-  it('reads a word wider than a double can hold exactly', () => {
-    expect(parseCapabilityBitmap('8000000000000000').has(63)).toBe(true)
-  })
-
-  it('splits into 32-bit words for a 32-bit build, which is how the kernel prints to one', () => {
-    expect([...parseCapabilityBitmap('1 0', 32)]).toEqual([32])
-  })
-
-  it('refuses a bitmap it cannot read rather than returning a shifted one', () => {
-    // Half a layout is worse than none: it looks plausible and every index is
-    // wrong. The caller falls back to xpad and says so.
-    expect([...parseCapabilityBitmap('not-a-bitmap')]).toEqual([])
-    expect([...parseCapabilityBitmap('')]).toEqual([])
-    expect([...parseCapabilityBitmap('0')]).toEqual([])
-  })
-})
-
-describe('joydevLayout', () => {
-  it('puts the stick clicks on 9 and 10 for an Xbox pad over USB', () => {
-    const { buttons, axes } = layoutOf(XPAD_USB)
-
-    expect(buttons.indexOf(EV_KEY.l3)).toBe(9)
-    expect(buttons.indexOf(EV_KEY.r3)).toBe(10)
-    expect(buttons.indexOf(EV_KEY.lb)).toBe(4)
-    expect(buttons.indexOf(EV_KEY.start)).toBe(7)
-    // The triggers sit between the sticks, which the browser's layout does not.
-    expect(axes.indexOf(EV_ABS.z)).toBe(2)
-    expect(axes.indexOf(EV_ABS.rx)).toBe(3)
-  })
-
-  it('puts them on 13 and 14 for the same pad over Bluetooth', () => {
-    // The bug. Four codes xpad never declares — BTN_C, BTN_Z, BTN_TL2, BTN_TR2
-    // — sit in front of the stick clicks and push them along, so a chord
-    // written down as 9 and 10 was two buttons this pad cannot press and
-    // pointer mode could not be opened at all.
-    const { buttons } = layoutOf(XBOX_BLUETOOTH)
-
-    expect(buttons.indexOf(EV_KEY.l3)).toBe(13)
-    expect(buttons.indexOf(EV_KEY.r3)).toBe(14)
-    expect(buttons.indexOf(EV_KEY.lb)).toBe(6)
-    expect(buttons.indexOf(EV_KEY.rb)).toBe(7)
-  })
-
-  it('puts them on 11 and 12 for a DualSense, which shifts differently again', () => {
-    const { buttons } = layoutOf(DUALSENSE)
-
-    expect(buttons.indexOf(EV_KEY.l3)).toBe(11)
-    expect(buttons.indexOf(EV_KEY.r3)).toBe(12)
-    // Its d-pad is four buttons rather than two axes, and they come last
-    // because 0x220 is above the gamepad block rather than below it.
-    expect(buttons.indexOf(0x220)).toBe(13)
-  })
-
-  it('keeps the face buttons at 0 on a device that also declares the old joystick codes', () => {
-    // joydev walks BTN_JOYSTICK upward first and the BTN_MISC block second,
-    // precisely so a gamepad's A stays index 0 next to a BTN_0 it inherited.
-    const { buttons } = joydevLayout([0x100, EV_KEY.a, EV_KEY.b], [EV_ABS.x, EV_ABS.y])
-    expect(buttons).toEqual([EV_KEY.a, EV_KEY.b, 0x100])
-  })
-
-  it('drops an axis code past the end of the joydev table', () => {
-    expect(joydevLayout([], [EV_ABS.x, 0x40, 0x41]).axes).toEqual([EV_ABS.x])
-  })
-
-  it('is what the xpad fallback claims to be', () => {
-    // The fallback is used when /sys cannot be read, so it has to be the layout
-    // this function would have produced for that pad rather than a second
-    // opinion about it.
-    expect(XPAD_LAYOUT).toEqual(layoutOf(XPAD_USB))
-  })
-})
-
 describe('readPad', () => {
-  const reading = (pad: { keys: number[]; abs: number[] }, state: Partial<PadSample>) =>
+  const reading = (
+    pad: { keys: readonly number[]; abs: readonly number[] },
+    state: Partial<PadSample>
+  ) =>
     readPad(layoutOf(pad), {
       buttons: state.buttons ?? new Set<number>(),
       axes: state.axes ?? []

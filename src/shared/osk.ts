@@ -1,3 +1,4 @@
+import { PAD_BUTTON_NAMES, type PadFamily } from './padFamily'
 import type { Direction } from './pointer'
 
 /**
@@ -88,17 +89,26 @@ export const OSK_ROWS: readonly (readonly OskKey[])[] = [
  * press A", and stamping that on fifty-six keycaps would say nothing while
  * making the legends unreadable.
  *
- * `{close}` carries the chord rather than a button, and that is the honest
- * label: ☰ here does not close the keyboard, it ends pointer mode outright and
- * takes the cursor with it. The twin of `COMPOSE_SHORTCUTS` in
+ * `close` carries the chord rather than a button, and that is the honest label:
+ * ☰ here does not close the keyboard, it ends pointer mode outright and takes
+ * the cursor with it. The twin of `composeShortcuts` in
  * `@shared/keyboardLayout`, which differs on exactly that key and for exactly
  * that reason.
+ *
+ * **A function of the pad rather than a table**, because it used to be a table
+ * and the table was an Xbox one: a DualSense was told to press X for a space
+ * and Y to send, and it has neither. `PAD_BUTTON_NAMES` is the one place those
+ * letters are decided now, and it is positional — `west` is the left-hand face
+ * button, which is X on an Xbox pad, □ on a Sony one and Y on a Switch one.
  */
-export const OSK_SHORTCUTS: Readonly<Partial<Record<OskKind, string>>> = {
-  space: 'X',
-  enter: 'Y',
-  backspace: 'B',
-  close: 'LB+RB'
+export function oskShortcuts(family: PadFamily): Readonly<Partial<Record<OskKind, string>>> {
+  const names = PAD_BUTTON_NAMES[family]
+  return {
+    space: names.west,
+    enter: names.north,
+    backspace: names.east,
+    close: `${names.lb}+${names.rb}`
+  }
 }
 
 /** Where the cursor sits when the keyboard opens: the first letter. */

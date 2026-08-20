@@ -237,7 +237,7 @@ export function App(): ReactNode {
   /** Where the log file is, for the Settings nameplate. Null until it answers. */
   const [logPath, setLogPath] = useState<string | null>(null)
 
-  const { connected, windowFocused, inputAccepted, scheme } = useGamepad()
+  const { connected, windowFocused, inputAccepted, scheme, pads } = useGamepad()
   const { focusedId, focus, move, confirm, setActiveScope } = useSpatialFocus()
 
   // A joystick does not reset a compositor's idle timer, so browsing with the
@@ -1669,6 +1669,7 @@ export function App(): ReactNode {
             // control belongs on the same row as the title.
             <DevicesScreen
               snapshot={bluetooth}
+              pads={pads}
               loading={bluetoothLoading}
               scope={ROOT_SCOPE}
               notice={bluetoothNotice}

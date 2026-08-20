@@ -7,6 +7,7 @@
 
 import type { BluetoothAction } from './bluetooth'
 import type { ScreenOwnership } from './input'
+import type { PadProfile } from './padLayout'
 import { DEFAULT_ACCENT, DEFAULT_KEYBOARD_SCALE, DEFAULT_UI_SCALE } from './theme'
 
 /** A digital store that GeForce NOW can link to and sync a library from. */
@@ -1006,6 +1007,17 @@ export interface LauncherApi {
      * launcher has to ask for this at all.
      */
     padActivity(): void
+    /**
+     * What the kernel says each attached controller is.
+     *
+     * Takes no argument, for the same reason as `openDonation`, and answers
+     * with hardware rather than with anything the renderer could act on. It
+     * exists because `Gamepad.mapping` is empty for every pad Chromium has no
+     * table for, and the indices are then the ones the *kernel* assigned — so
+     * the renderer asks main to read them out of `/sys` and translates. Called
+     * once per hot-plug, never per frame. Empty on a machine with no pad.
+     */
+    padList(): Promise<PadProfile[]>
     /**
      * Where the log file is, so the interface can say which one to attach.
      *

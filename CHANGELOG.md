@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Controllers that Linux has no translation table for now work properly.** Generic USB pads, several third-party PlayStation-shaped pads and some pads over some connections are handed to the launcher with their buttons in the order the *controller* declares them rather than in a standard order, and the launcher read them as if they were an Xbox pad. The d-pad did nothing, the wrong face buttons fired, the right stick scrolled on a trigger, and **☰ — the button that starts a game — was a stick click**. It now asks the system what each button on each pad actually is, which is the same question it already asked for the desktop cursor, and uses the answer everywhere: the grid, the cursor in the sign-in window, and both on-screen keyboards. A pad it still cannot place behaves exactly as it did before rather than worse, and the log says which one and why.
+- **A flight stick or a wheel plugged in beside the pad no longer presses buttons in the launcher.** Its trigger is the same number as a gamepad's A, so pulling it opened whatever the cursor was on, and a throttle resting off centre scrolled the page on its own. The launcher now recognises that such a device is not a controller and reads nothing from it.
+
+### Added
+
+- **Switch-style controllers are named correctly.** B confirms and A goes back, the way they do everywhere else on Linux, and the footer, the cursor hint and both on-screen keyboards now say so instead of saying A and B. The buttons themselves do not move: the one under your thumb still confirms, whichever controller you pick up.
+- **The on-screen keyboards name your own pad's buttons.** A PlayStation pad was told to press X for a space and Y to send, and it has neither; it now says □ and △, and the hint under the cursor says × and ○ rather than A and B.
+- **Settings → Controllers and Bluetooth lists the controllers that are connected**, with how each one is attached and whether the launcher had to guess at its buttons — the one fact that explains a pad behaving oddly, and until now it was only in the log file.
+
 ## [0.1.3] - 2026-08-20
 
 ### Added

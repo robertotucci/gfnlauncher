@@ -1,4 +1,4 @@
-import { Circle, Menu, Square, Triangle, X, type LucideIcon } from 'lucide-react'
+import { Circle, Menu, Plus, Square, Triangle, X, type LucideIcon } from 'lucide-react'
 import { type ReactNode } from 'react'
 import { ACTION_KEYS, type GamepadAction } from '@/gamepad/intents'
 import type { InputScheme } from '@/gamepad/scheme'
@@ -37,6 +37,29 @@ const PLAYSTATION: Record<GamepadAction, Glyph> = {
   pageRight: { label: 'R1' }
 }
 
+/**
+ * A Switch pad, which is the same table with two pairs of letters swapped.
+ *
+ * **The actions do not move; only the names do.** `confirm` is still the button
+ * under the thumb — the kernel's `BTN_SOUTH`, the W3C's index 0 — and on this
+ * pad that button is printed **B**. Swapping the action instead would put the
+ * launcher's "press to open" somewhere different from every other pad and from
+ * the rest of the Linux desktop, and would move the mouse click in pointer mode
+ * with it. So the legend is relabelled and the mapping is left alone.
+ *
+ * `+` is a shape rather than a character on this pad, the way ☰ is on the other
+ * two, so it takes an icon for the reason PlayStation's faces do.
+ */
+const NINTENDO: Record<GamepadAction, Glyph> = {
+  confirm: { label: 'B' },
+  back: { label: 'A' },
+  search: { label: 'Y' },
+  menu: { label: 'X' },
+  start: { label: 'Plus', icon: Plus },
+  pageLeft: { label: 'L' },
+  pageRight: { label: 'R' }
+}
+
 /** Only the keys whose DOM name is too long to read at three metres. */
 const KEY_ALIASES: Record<string, string> = { Escape: 'ESC' }
 
@@ -48,6 +71,7 @@ const KEY_ALIASES: Record<string, string> = { Escape: 'ESC' }
 export function glyphFor(action: GamepadAction, scheme: InputScheme): Glyph | null {
   if (scheme === 'xbox') return XBOX[action]
   if (scheme === 'playstation') return PLAYSTATION[action]
+  if (scheme === 'nintendo') return NINTENDO[action]
 
   const key = ACTION_KEYS[action]
   if (!key) return null

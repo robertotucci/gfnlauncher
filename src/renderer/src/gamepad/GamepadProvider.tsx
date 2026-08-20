@@ -9,6 +9,7 @@ import {
   type ReactNode
 } from 'react'
 import { SCREEN_OURS, shouldAcceptInput, type InputGate } from '@shared/input'
+import { standardReading, type PadProfile } from '@shared/padLayout'
 import {
   BUTTON_ACTIONS,
   KEY_BINDINGS,
@@ -18,6 +19,13 @@ import {
   type IntentHandler
 } from './intents'
 import { PAD_START, stepPad } from './pad'
+import {
+  padInfo,
+  samePadInfo,
+  translatePad,
+  type PadInfo,
+  type PadTranslation
+} from './translate'
 import { detectPadScheme, type InputScheme } from './scheme'
 
 interface GamepadContextValue {
@@ -46,6 +54,15 @@ interface GamepadContextValue {
   inputAccepted: boolean
   /** Glyph set for the device in hand: the pad's family, or the keyboard. */
   scheme: InputScheme
+  /**
+   * Every controller connected right now, for the Devices screen to draw.
+   *
+   * Here rather than on its own channel because this loop is already the only
+   * thing in the renderer that knows what is plugged in, and it is the only
+   * thing that knows how each one is being *read* — which is the fact worth
+   * putting on a screen. Updated when the room changes and never per frame.
+   */
+  pads: readonly PadInfo[]
 }
 
 const GamepadContext = createContext<GamepadContextValue | null>(null)
@@ -71,6 +88,7 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
    */
   const [inputAccepted, setInputAccepted] = useState(true)
   const [scheme, setScheme] = useState<InputScheme>('keyboard')
+  const [pads, setPads] = useState<readonly PadInfo[]>([])
   /**
    * Everything `shouldAcceptInput` needs, in a ref rather than in state.
    *
@@ -145,6 +163,61 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
     /** Frames on which the pad reported something while suspended. See below. */
     let suspendedFrames = 0
 
+    /**
+     * How each pad in the room is being read, keyed by Chromium's id.
+     *
+     * **Every pad gets an entry the first frame it is seen, before main has
+     * answered anything**, and that entry is the identity — so nothing waits on
+     * an `invoke` and a pad works from its first press exactly as it does now.
+     * The kernel's numbering replaces it when the answer arrives, which is one
+     * frame or two later on a hot-plug and is imperceptible.
+     */
+    const translations = new Map<string, PadTranslation>()
+    /**
+     * The pads main has already been asked about.
+     *
+     * Separate from the map above because the *answer* can be "nothing" — a
+     * machine with no `/sys`, a node that matched nothing — and without this a
+     * pad that could not be placed would have the loop asking again sixty times
+     * a second for the rest of the session. One ask per pad per connection;
+     * unplugging it clears both.
+     */
+    const answered = new Set<string>()
+    let asking = false
+    let described: readonly PadInfo[] = []
+
+    /** Asks main what these devices are, and re-reads each of them against it. */
+    const describe = (
+      ids: readonly { id: string; buttons: number; axes: number; mapped: boolean }[]
+    ): void => {
+      if (asking) return
+      const ask = window.launcher?.app.padList
+      // No bridge is the permissive default, here as everywhere: the pads keep
+      // whatever they already have, which is the identity. Marked answered so
+      // this is not retried every frame for the life of the session.
+      if (!ask) {
+        for (const pad of ids) answered.add(pad.id)
+        return
+      }
+      asking = true
+
+      void ask()
+        .then((profiles: PadProfile[]) => {
+          for (const pad of ids) {
+            const translation = translatePad(pad.id, pad.mapped, pad.buttons, pad.axes, profiles)
+            translations.set(pad.id, translation)
+            if (translation.note) console.info(translation.note)
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('Could not read the controller layouts; assuming the standard one.', error)
+        })
+        .finally(() => {
+          for (const pad of ids) answered.add(pad.id)
+          asking = false
+        })
+    }
+
     const applyScheme = (next: InputScheme): void => {
       setScheme((current) => (current === next ? current : next))
     }
@@ -176,24 +249,74 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
       /** The pad the legend describes: the one being used, else the first one. */
       let firstPadId: string | null = null
       let activePadId: string | null = null
+      /** Ids seen this frame, so a pad that left can be forgotten. */
+      const present = new Set<string>()
+      const unknown: { id: string; buttons: number; axes: number; mapped: boolean }[] = []
+      const info: PadInfo[] = []
 
       for (const pad of pads) {
         if (!pad) continue
-        anyConnected = true
-        firstPadId ??= pad.id
+        present.add(pad.id)
 
-        const padDirection = readDirection(pad)
+        let translation = translations.get(pad.id)
+        if (!translation) {
+          // Provisional, and it is the identity: a pad must work on its first
+          // press whether or not main has answered yet.
+          translation = translatePad(pad.id, pad.mapping === 'standard', 0, 0, [])
+          translations.set(pad.id, translation)
+        }
+        // A flight stick is a `Gamepad` to the browser and is not one here, so
+        // it must not make the footer draw pad glyphs for a device that cannot
+        // press any of them. Every other outcome counts, including the ones
+        // that could not be placed — this is the "is there a controller" light,
+        // and it fails open like the rest.
+        if (translation.numbering !== 'ignored') {
+          anyConnected = true
+          firstPadId ??= pad.id
+        }
+        if (!answered.has(pad.id)) {
+          unknown.push({
+            id: pad.id,
+            buttons: pad.buttons.length,
+            axes: pad.axes.length,
+            mapped: pad.mapping === 'standard'
+          })
+        }
+        info.push(padInfo(pad.id, translation))
+
+        // From here down the pad is the W3C one, whatever the device numbered
+        // its buttons — which is what lets every table below stay a constant.
+        const reading = standardReading(
+          { buttons: pad.buttons.map((button) => button.pressed), axes: pad.axes },
+          translation.map
+        )
+
+        const padDirection = readDirection(reading)
         direction ??= padDirection
         let padActive = padDirection !== null
 
         for (const [index, action] of Object.entries(BUTTON_ACTIONS)) {
-          if (pad.buttons[Number(index)]?.pressed) {
+          if (reading.buttons[Number(index)]) {
             nowPressed.add(action)
             padActive = true
           }
         }
 
         if (padActive) activePadId ??= pad.id
+      }
+
+      for (const id of translations.keys()) {
+        if (!present.has(id)) {
+          translations.delete(id)
+          answered.delete(id)
+        }
+      }
+      // One ask per hot-plug rather than one per frame: `unknown` is empty as
+      // soon as every pad in the room has been asked about.
+      if (unknown.length > 0) describe(unknown)
+      if (!samePadInfo(described, info)) {
+        described = info
+        setPads(info)
       }
 
       setConnected((current) => (current === anyConnected ? current : anyConnected))
@@ -357,8 +480,8 @@ export function GamepadProvider({ children }: { children: ReactNode }): ReactNod
   }, [])
 
   const value = useMemo<GamepadContextValue>(
-    () => ({ subscribe, connected, windowFocused, inputAccepted, scheme }),
-    [subscribe, connected, windowFocused, inputAccepted, scheme]
+    () => ({ subscribe, connected, windowFocused, inputAccepted, scheme, pads }),
+    [subscribe, connected, windowFocused, inputAccepted, scheme, pads]
   )
 
   return <GamepadContext.Provider value={value}>{children}</GamepadContext.Provider>

@@ -25,6 +25,8 @@ import type {
   UpdateStatus
 } from '@shared/types'
 import { resolveLaunchPath } from '@shared/games'
+import type { PadProfile } from '@shared/padLayout'
+import { listPadProfiles } from './padProfile'
 import { isPowerAction, runPowerAction } from './power'
 import { act, getBluetooth, respondToPairing, setPowered, setScan } from './bluetooth'
 import { createDisplayWakeLock } from './displaySleep'
@@ -163,9 +165,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     disarmHandback()
     const result = await openGfnClient({
       // `autoClose: false`: the user asked for the real client on purpose, so
-      // nothing here ends it. The watch is still worth arming — this path
-      // minimises unconditionally, and there is nothing a pad can do to raise an
-      // iconified window, so the way back matters more here rather than less.
+      // nothing here ends it. The watch is still worth arming — in a desktop
+      // session this path minimises, and there is nothing a pad can do to raise
+      // an iconified window, so the way back matters more here rather than less.
       onSpawned: (child) =>
         armHandback({
           child,
@@ -653,4 +655,16 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // there is no argument to forge. The most a renderer could do by shouting
   // this is keep the television on, which is a thing the user can see.
   ipcMain.on(IPC.appPadActivity, () => displayWakeLock.padActivity())
+
+  /**
+   * What the kernel says each attached controller is.
+   *
+   * **No payload, so there is nothing to validate** — the same arrangement as
+   * `app:openDonation` and `app:diagnostics`, and written down here so it does
+   * not read as the rule being skipped. What goes *out* is a description of
+   * hardware, read from `/sys`: no path, no handle, nothing the renderer can
+   * turn back into a file. Never throws; a machine with no pad and a sandbox
+   * with no `/sys` both answer with an empty list.
+   */
+  ipcMain.handle(IPC.padList, async (): Promise<PadProfile[]> => listPadProfiles())
 }

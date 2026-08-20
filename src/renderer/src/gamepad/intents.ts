@@ -1,3 +1,5 @@
+import type { StandardReading } from '@shared/padLayout'
+
 export type Direction = 'up' | 'down' | 'left' | 'right'
 
 /**
@@ -23,16 +25,26 @@ export type Intent =
 export type IntentHandler = (intent: Intent) => void
 
 /**
- * Standard Gamepad mapping. Index positions come from the W3C "standard"
- * layout, which every Xbox/PlayStation/8BitDo pad reports on Linux.
+ * Standard Gamepad mapping, and it is **positional**.
+ *
+ * Index 0 is the bottom face button whatever is printed on it: A on an Xbox
+ * pad, ✕ on a DualSense, **B** on a Switch pad. The family changes the glyph
+ * the footer draws and never the meaning, which is what keeps the same thumb
+ * movement working when somebody swaps controller — see `@shared/padFamily`.
+ *
+ * Not every pad reports these indices, either. Chromium applies the standard
+ * layout only to the devices in its own vendor/product table and hands over the
+ * kernel's raw numbering for the rest; `standardReading` in `@shared/padLayout`
+ * is what turns one into the other, upstream of this file, so everything here
+ * can go on being a fixed table.
  */
 export const BUTTON_ACTIONS: Record<number, GamepadAction> = {
-  0: 'confirm', // A / Cross
-  1: 'back', // B / Circle
-  2: 'search', // X / Square
-  3: 'menu', // Y / Triangle
-  4: 'pageLeft', // LB / L1
-  5: 'pageRight', // RB / R1
+  0: 'confirm', // A / ✕ / B
+  1: 'back', // B / ○ / A
+  2: 'search', // X / □ / Y
+  3: 'menu', // Y / △ / X
+  4: 'pageLeft', // LB / L1 / L
+  5: 'pageRight', // RB / R1 / R
   // Menu / Options / Start. Taking this one leaves every face button meaning
   // exactly what it meant before.
   9: 'start'
@@ -85,10 +97,18 @@ for (const [key, intent] of Object.entries(KEY_BINDINGS)) {
   if (intent.kind === 'action') ACTION_KEYS[intent.action] ??= key
 }
 
-/** Reads the direction a pad is currently pointing, d-pad or left stick. */
-export function readDirection(pad: Gamepad): Direction | null {
+/**
+ * Reads the direction a pad is currently pointing, d-pad or left stick.
+ *
+ * Takes a `StandardReading` rather than a `Gamepad`, which is what makes it
+ * testable at all: the suite has no DOM and cannot construct the one and can
+ * construct the other in a line. The caller builds it — from the pad untouched
+ * when Chromium mapped it, and through the kernel's own numbering when it did
+ * not.
+ */
+export function readDirection(pad: StandardReading): Direction | null {
   for (const [index, direction] of Object.entries(DPAD_DIRECTIONS)) {
-    if (pad.buttons[Number(index)]?.pressed) return direction
+    if (pad.buttons[Number(index)]) return direction
   }
 
   const x = pad.axes[0] ?? 0

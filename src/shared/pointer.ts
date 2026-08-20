@@ -21,6 +21,9 @@
  * Everything here takes its clock as an argument. Nothing reads `Date.now()`.
  */
 
+import { PAD_BUTTON_NAMES, type PadFamily } from './padFamily'
+import type { PadProfile } from './padLayout'
+
 /**
  * Which way something is being pushed.
  *
@@ -111,6 +114,19 @@ export const KEYBOARD_CHORD_HOLD_MS = 0
  * down would fire the toggle the instant the loop woke up.
  */
 export const MAX_SAMPLE_GAP_MS = 250
+
+/**
+ * The gate for picking a key on a grid, as opposed to moving a cursor.
+ *
+ * Higher than `POINTER_DEADZONE` on purpose, and it is a different question:
+ * the cursor wants every bit of a small push, and choosing a key is a discrete
+ * step that a twitch must not take two of. It is the third deadzone in this
+ * launcher and the only one with two callers — the preload's keyboard and the
+ * composed one main draws — which is why it is here rather than a literal in
+ * each. The other two stay separate; `POINTER_DEADZONE`'s own comment argues
+ * against sharing them.
+ */
+export const KEY_GRID_DEADZONE = 0.5
 
 export interface ChordState {
   /** When the pair was first seen down, or null when it is not. */
@@ -355,6 +371,50 @@ export const COMPOSE_ACTIONS: Readonly<Record<number, ComposeActionName>> = {
   3: 'send'
 }
 
+// ── The legend the cursor draws for itself ──────────────────────────────────
+
+/** One entry of it: the button, and what it does here. */
+export interface HintEntry {
+  readonly button: string
+  readonly label: string
+}
+
+/**
+ * The legend, which is the only manual there is.
+ *
+ * It names what the buttons do *here* rather than what they do in the launcher,
+ * and it changes with the layer for the same reason the footer in `App.tsx`
+ * does: a legend that says "Click" while A is typing a letter is worse than no
+ * legend. And it names them in **this pad's** vocabulary, which it did not: a
+ * DualSense was told to press A and B for two buttons it does not have.
+ *
+ * Pure and here rather than in the preload because it crosses no boundary and
+ * the preload cannot be tested — the suite has no DOM. The preload draws each
+ * entry with `textContent`; see the note there about why it is no longer built
+ * as a string of HTML.
+ */
+export function pointerHint(family: PadFamily, keyboardOpen: boolean): readonly HintEntry[] {
+  const names = PAD_BUTTON_NAMES[family]
+
+  // With the keyboard up it names only what is *not* already printed on a
+  // keycap. Space, Enter, Delete and Close carry their own button now, and
+  // repeating them here would be the legend competing with the keyboard.
+  if (keyboardOpen) {
+    return [
+      { button: 'Stick / D-pad', label: 'Move' },
+      { button: names.south, label: 'Press key' },
+      { button: names.start, label: 'Exit pointer' }
+    ]
+  }
+
+  return [
+    { button: names.south, label: 'Click' },
+    { button: names.east, label: 'Right click' },
+    { button: `${names.lb}+${names.rb}`, label: 'Keyboard' },
+    { button: names.start, label: 'Exit pointer' }
+  ]
+}
+
 /**
  * Which actions started and which ended between two samples.
  *
@@ -439,6 +499,25 @@ export interface PointerRestore {
   readonly accent: string
   /** A multiplier from `keyboardScaleValue`, applied to the keyboard's unit. */
   readonly scale: number
+  /**
+   * What the kernel says each attached controller is.
+   *
+   * The preload reads the pad through the browser, and `Gamepad.mapping` is
+   * empty for every device Chromium has no table for — so the indices are the
+   * kernel's and the chord is wherever that pad happens to put it. It cannot
+   * ask main for the translation the way the renderer does, because it has no
+   * bridge and must never grow one, so main pushes it. See `@shared/padLayout`.
+   */
+  readonly pads: readonly PadProfile[]
+  /**
+   * Which pad the on-screen keyboard's badges and the cursor hint should name.
+   *
+   * Decided in main rather than in the preload for one reason: it has to agree
+   * with the badges on the *other* keyboard, the one main draws itself, and two
+   * places working it out separately is how a DualSense came to be told to
+   * press X for a space.
+   */
+  readonly family: PadFamily
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   COMPOSE_ACTIONS,
   KEYBOARD_CHORD_BUTTONS,
   KEYBOARD_CHORD_HOLD_MS,
+  KEY_GRID_DEADZONE,
   MAX_SAMPLE_GAP_MS,
   POINTER_ACTIONS,
   POINTER_DEADZONE,
@@ -15,6 +16,7 @@ import {
   chordHeld,
   heldActions,
   isPointerCommand,
+  pointerHint,
   pointerSpeed,
   scrollDelta,
   stepChord,
@@ -443,5 +445,49 @@ describe('isPointerCommand', () => {
     expect(isPointerCommand({ kind: 'key', key: 'F1' })).toBe(false)
     expect(isPointerCommand({ kind: 'key', key: 'Meta' })).toBe(false)
     expect(isPointerCommand({ kind: 'key', key: 'Enter' })).toBe(true)
+  })
+})
+
+describe('pointerHint', () => {
+  it('names the buttons of the pad in hand rather than an Xbox pad', () => {
+    // The bug: with a DualSense the cursor's own legend said "A Click / B Right
+    // click", and that pad has neither of those printed on it anywhere.
+    const sony = pointerHint('playstation', false)
+    expect(sony[0]).toEqual({ button: '×', label: 'Click' })
+    expect(sony[1]).toEqual({ button: '○', label: 'Right click' })
+    expect(sony[2]?.button).toBe('L1+R1')
+
+    expect(pointerHint('xbox', false)[0]?.button).toBe('A')
+    // Positional, so on a Switch pad the button that clicks is the one under
+    // the thumb — which is printed B.
+    expect(pointerHint('nintendo', false)[0]?.button).toBe('B')
+  })
+
+  it('drops to what is not already printed on a keycap once the keyboard is up', () => {
+    // Space, Enter, Delete and Close carry their own badge there, and repeating
+    // them along the bottom would be the legend competing with the keyboard.
+    const open = pointerHint('xbox', true).map((entry) => entry.label)
+    expect(open).toEqual(['Move', 'Press key', 'Exit pointer'])
+    expect(open).not.toContain('Keyboard')
+  })
+
+  it('always offers a way out, on both layers and every pad', () => {
+    // A mode with no exit on the legend is a mode somebody is stuck in, with no
+    // keyboard in the room to recover with.
+    for (const family of ['xbox', 'playstation', 'nintendo'] as const) {
+      for (const open of [false, true]) {
+        expect(pointerHint(family, open).some((entry) => entry.label === 'Exit pointer')).toBe(true)
+      }
+    }
+  })
+})
+
+describe('KEY_GRID_DEADZONE', () => {
+  it('is stiffer than the cursor, because a key is a discrete step', () => {
+    // The cursor wants every bit of a small push; picking a key must not take
+    // two steps on a twitch. Shared by the preload's keyboard and the composed
+    // one, which used to hold the same literal apiece.
+    expect(KEY_GRID_DEADZONE).toBeGreaterThan(POINTER_DEADZONE)
+    expect(KEY_GRID_DEADZONE).toBeLessThan(1)
   })
 })

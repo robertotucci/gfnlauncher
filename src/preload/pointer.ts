@@ -5,9 +5,11 @@ import {
   COMPOSE_ACTIONS,
   KEYBOARD_CHORD_BUTTONS,
   KEYBOARD_CHORD_HOLD_MS,
+  KEY_GRID_DEADZONE,
   centreOf,
   chordHeld,
   heldActions,
+  pointerHint,
   scrollDelta,
   stepChord,
   stepPointer,
@@ -20,15 +22,22 @@ import {
   type PointerRestore,
   type PointerState
 } from '@shared/pointer'
+import { isPadFamily, type PadFamily } from '@shared/padFamily'
+import {
+  standardReading,
+  translatePad,
+  type PadProfile,
+  type PadTranslation
+} from '@shared/padLayout'
 import {
   OSK_NAV_START,
   OSK_ROWS,
-  OSK_SHORTCUTS,
   OSK_START,
   moveOskSelection,
   oskChar,
   oskKeyAt,
   oskLabel,
+  oskShortcuts,
   stepOskNav,
   type OskCursor,
   type OskKey,
@@ -152,6 +161,20 @@ let keyNodes: Map<string, HTMLElement> = new Map()
  * `ensureUi`, and again on every message after that.
  */
 let look: { accent: string; scale: number } | null = null
+
+/**
+ * Which pad the badges and the hint name, and what the kernel says each pad is.
+ *
+ * Both arrive on `pointer:restore`, because this preload cannot ask: it has no
+ * bridge and must never grow one. The family is decided in main so that it
+ * agrees with the badges on the *other* on-screen keyboard, the one main draws
+ * itself. `xbox` until told otherwise, which is the W3C layout the other two
+ * are relabellings of, so nothing is unlabelled on the first frame.
+ */
+let family: PadFamily = 'xbox'
+let padProfiles: readonly PadProfile[] = []
+/** How each pad is being read, keyed by `Gamepad.id`. Cleared on a new list. */
+let translations = new Map<string, PadTranslation>()
 
 function applyLook(): void {
   if (!hostNode || !look) return
@@ -368,10 +391,6 @@ function buildKeyboard(): HTMLElement {
         node.dataset.wide = '1'
         node.dataset.kind = key.kind
       }
-      // `content` needs a quoted string, and the quotes have to be inside the
-      // property value — `content: var(--sc)` inserts it verbatim.
-      const shortcut = OSK_SHORTCUTS[key.kind]
-      if (shortcut) node.style.setProperty('--sc', `"${shortcut}"`)
       node.textContent = oskLabel(key, false)
       rowNode.appendChild(node)
       keyNodes.set(key.id, node)
@@ -383,22 +402,37 @@ function buildKeyboard(): HTMLElement {
 }
 
 /**
- * The legend, which is the only manual there is.
+ * Draws the legend, which is the only manual there is.
  *
- * It names what the buttons do *here* rather than what they do in the launcher,
- * and it changes with the layer for the same reason the footer in `App.tsx`
- * does: a legend that says "Click" while A is typing a letter is worse than no
- * legend.
+ * `pointerHint` in `@shared/pointer` decides what it says; this puts it on the
+ * screen. **Built as nodes rather than as a string of HTML**, and that changed
+ * with the pad families: the button names used to be four literals in this file
+ * and are now values that arrived over IPC, and interpolating one of those into
+ * `innerHTML` — in a document belonging to NVIDIA rather than to us — is a hole
+ * that does not need to exist. `textContent` cannot open one.
  */
-function hintText(): string {
-  // With the keyboard up it names only what is *not* already printed on a
-  // keycap. Space, Enter, Delete and Close carry their own button now, and
-  // repeating them here would be the legend competing with the keyboard.
-  return keyboardOpen
-    ? '<span><b>Stick / D-pad</b>Move</span><span><b>A</b>Press key</span>' +
-        '<span><b>☰</b>Exit pointer</span>'
-    : '<span><b>A</b>Click</span><span><b>B</b>Right click</span>' +
-        '<span><b>LB+RB</b>Keyboard</span><span><b>☰</b>Exit pointer</span>'
+let hintDrawn: string | null = null
+
+function paintHint(): void {
+  if (!hintNode) return
+
+  // Only two things change what this says — the layer and the pad — and it is
+  // asked sixty times a second, so it is rebuilt on a transition rather than on
+  // a frame. The old `innerHTML` line rebuilt it every frame; that was cheap
+  // enough not to matter and there is no reason to keep doing it with nodes.
+  const signature = `${family}:${keyboardOpen}`
+  if (signature === hintDrawn) return
+  hintDrawn = signature
+  hintNode.replaceChildren()
+
+  for (const entry of pointerHint(family, keyboardOpen)) {
+    const span = document.createElement('span')
+    const button = document.createElement('b')
+    button.textContent = entry.button
+    span.appendChild(button)
+    span.appendChild(document.createTextNode(entry.label))
+    hintNode.appendChild(span)
+  }
 }
 
 function paint(): void {
@@ -412,11 +446,15 @@ function paint(): void {
   if (!active) return
 
   cursorNode!.style.transform = `translate3d(${Math.round(cursor.x)}px, ${Math.round(cursor.y)}px, 0)`
-  hintNode!.innerHTML = hintText()
+  paintHint()
 
   if (!keyboardOpen) return
 
   const selected = oskKeyAt(OSK_ROWS, keyboardAt)
+  // Resolved here rather than in `buildKeyboard`, which runs once: the family
+  // arrives on `pointer:restore` and can change under a keyboard that is
+  // already on screen, and this loop touches every key anyway.
+  const shortcuts = oskShortcuts(family)
   for (const row of OSK_ROWS) {
     for (const key of row) {
       const node = keyNodes.get(key.id)
@@ -424,6 +462,10 @@ function paint(): void {
       node.textContent = oskLabel(key, shift)
       node.dataset.on = key.id === selected?.id ? '1' : '0'
       node.dataset.lit = key.kind === 'shift' && shift ? '1' : '0'
+      // `content` needs a quoted string, and the quotes have to be inside the
+      // property value — `content: var(--sc)` inserts it verbatim.
+      const shortcut = shortcuts[key.kind]
+      if (shortcut) node.style.setProperty('--sc', `"${shortcut}"`)
     }
   }
 }
@@ -453,36 +495,70 @@ function readPads(): Sample {
   for (const pad of pads) {
     if (!pad) continue
 
-    for (let index = 0; index < pad.buttons.length; index += 1) {
-      if (pad.buttons[index]?.pressed) buttons.add(index)
+    // Everything below this line is the W3C layout, whatever the device
+    // numbered its own buttons. Chromium only applies that layout to the pads
+    // it has a table for, and for the rest it hands over the kernel's raw
+    // indices — where the chord is at 13 and 14 rather than 10 and 11, and
+    // where the d-pad is a pair of axes rather than four buttons. Translating
+    // here is what lets `CHORD_BUTTONS` and the rest stay fixed tables.
+    const reading = standardReading(
+      { buttons: pad.buttons.map((button) => button.pressed), axes: pad.axes },
+      translationFor(pad).map
+    )
+
+    for (let index = 0; index < reading.buttons.length; index += 1) {
+      if (reading.buttons[index]) buttons.add(index)
     }
 
     // Largest deflection wins, so two pads do not cancel each other out.
-    if (Math.abs(pad.axes[0] ?? 0) > Math.abs(left.x)) left.x = pad.axes[0] ?? 0
-    if (Math.abs(pad.axes[1] ?? 0) > Math.abs(left.y)) left.y = pad.axes[1] ?? 0
-    if (Math.abs(pad.axes[2] ?? 0) > Math.abs(right.x)) right.x = pad.axes[2] ?? 0
-    if (Math.abs(pad.axes[3] ?? 0) > Math.abs(right.y)) right.y = pad.axes[3] ?? 0
+    if (Math.abs(reading.axes[0] ?? 0) > Math.abs(left.x)) left.x = reading.axes[0] ?? 0
+    if (Math.abs(reading.axes[1] ?? 0) > Math.abs(left.y)) left.y = reading.axes[1] ?? 0
+    if (Math.abs(reading.axes[2] ?? 0) > Math.abs(right.x)) right.x = reading.axes[2] ?? 0
+    if (Math.abs(reading.axes[3] ?? 0) > Math.abs(right.y)) right.y = reading.axes[3] ?? 0
 
-    direction ??= dpadDirection(pad)
+    direction ??= dpadDirection(reading.buttons)
   }
 
   return { buttons, left, right, direction }
 }
 
+/**
+ * How to read this pad, worked out once per device and remembered.
+ *
+ * Memoised because `translatePad` walks a list of profiles and this runs sixty
+ * times a second per pad. The cache is dropped whole whenever main sends a new
+ * list, which is also how a pad plugged in mid-session gets re-examined.
+ */
+function translationFor(pad: Gamepad): PadTranslation {
+  const known = translations.get(pad.id)
+  if (known) return known
+
+  const translation = translatePad(
+    pad.id,
+    pad.mapping === 'standard',
+    pad.buttons.length,
+    pad.axes.length,
+    padProfiles
+  )
+  translations.set(pad.id, translation)
+  return translation
+}
+
 /** D-pad only. The stick drives the keyboard grid through its own deadzone. */
-function dpadDirection(pad: Gamepad): Direction | null {
-  if (pad.buttons[12]?.pressed) return 'up'
-  if (pad.buttons[13]?.pressed) return 'down'
-  if (pad.buttons[14]?.pressed) return 'left'
-  if (pad.buttons[15]?.pressed) return 'right'
+function dpadDirection(buttons: readonly boolean[]): Direction | null {
+  if (buttons[12]) return 'up'
+  if (buttons[13]) return 'down'
+  if (buttons[14]) return 'left'
+  if (buttons[15]) return 'right'
   return null
 }
 
 /** A stick resolved to one direction, the way `readDirection` does it. */
 function stickDirection(x: number, y: number): Direction | null {
   // Higher than POINTER_DEADZONE: picking a key is a discrete choice and a
-  // twitch must not skip two of them.
-  const gate = 0.5
+  // twitch must not skip two of them. Shared with the composed keyboard, which
+  // is the only other thing in the launcher moving a selection on a grid.
+  const gate = KEY_GRID_DEADZONE
   if (Math.abs(x) > Math.abs(y)) {
     if (x <= -gate) return 'left'
     if (x >= gate) return 'right'
@@ -725,6 +801,18 @@ ipcRenderer.on(POINTER_RESTORE, (_event, next: unknown) => {
   if (typeof restore.accent === 'string' && typeof restore.scale === 'number') {
     look = { accent: restore.accent, scale: restore.scale }
     applyLook()
+  }
+
+  // Each field checked on its own and each one optional, for the reason the
+  // block above this handler gives: this payload has now been widened twice,
+  // and a half-updated build must lose one feature rather than the cursor.
+  if (isPadFamily(restore.family)) family = restore.family
+  if (Array.isArray(restore.pads)) {
+    padProfiles = restore.pads
+    // Dropped whole rather than merged: a pad that was switched on since the
+    // last message has to be examined against the new list, and a pad that
+    // left must not keep a translation nothing will ever clear.
+    translations = new Map()
   }
 
   lastSample = performance.now()

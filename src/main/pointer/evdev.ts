@@ -1,6 +1,17 @@
-import { createReadStream, readFileSync, readdirSync, watch, type FSWatcher } from 'node:fs'
+import { createReadStream, readdirSync, watch, type FSWatcher } from 'node:fs'
 import type { ReadStream } from 'node:fs'
 import type { ComposeActionName, PointerActionName } from '@shared/pointer'
+import {
+  EV_ABS,
+  EV_DPAD,
+  EV_KEY,
+  axisIndices,
+  layoutOfProfile,
+  rightStick,
+  type PadLayout,
+  type PadProfile
+} from '@shared/padLayout'
+import { padProfileFor } from '../padProfile'
 
 /**
  * Reading the pad from main, without a Gamepad API and without an ioctl.
@@ -164,180 +175,31 @@ export const PAD_SAMPLE_EMPTY: PadSample = { buttons: new Set(), axes: [] }
 // ── Which number is which button ────────────────────────────────────────────
 
 /**
- * The kernel's own codes, from `linux/input-event-codes.h`.
+ * The vocabulary — the evdev codes, `joydevLayout`, `parseCapabilityBitmap`,
+ * `XPAD_LAYOUT` — is in `@shared/padLayout`, and the reading of it out of
+ * `/sys` is in `../padProfile`. Both were here until the browser turned out to
+ * need the same answer: Chromium has no standard mapping for a great many pads
+ * and hands the renderer these very indices. Neither of those modules opens a
+ * device, which is what keeps the one-consumer rule on *this* file intact.
  *
- * These are what a device *declares*, and they are the stable half: BTN_THUMBL
- * is 0x13d on every pad, every driver and every transport. The joydev **index**
- * it then arrives on is not stable at all, which is what the rest of this
- * section is about.
+ * The bug they exist for is worth keeping next to the reader. The stick clicks
+ * used to be written down as joydev 9 and 10. That is right for an Xbox pad on
+ * `xpad`, the USB driver, and wrong for the same pad over **Bluetooth**, where
+ * it goes through `hid-microsoft` and declares the whole BTN_A…BTN_THUMBR range
+ * — including the four codes `xpad` leaves out (BTN_C, BTN_Z, BTN_TL2,
+ * BTN_TR2). joydev numbers the buttons a device declares in ascending code
+ * order, so those four shift everything after them: L3 and R3 land on **13 and
+ * 14**, and 9 and 10 become two buttons that pad can never press. The chord
+ * could not fire at all, in the exact configuration a launcher used from a sofa
+ * is most likely to be in. A DualSense shifts differently again — 11 and 12 —
+ * because it declares its triggers as buttons as well.
+ *
+ * `JSIOCGBTNMAP` would give the mapping directly and needs an ioctl, which is
+ * the one thing this whole module is arranged to avoid. It is not needed: each
+ * node's `device/capabilities/` directory publishes the same bitmaps joydev
+ * itself builds the map from, and its algorithm is eight lines long, so it is
+ * reproduced exactly rather than guessed at.
  */
-export const EV_KEY = {
-  a: 0x130,
-  b: 0x131,
-  x: 0x133,
-  y: 0x134,
-  lb: 0x136,
-  rb: 0x137,
-  select: 0x13a,
-  start: 0x13b,
-  mode: 0x13c,
-  l3: 0x13d,
-  r3: 0x13e
-} as const
-
-export const EV_ABS = {
-  x: 0x00,
-  y: 0x01,
-  z: 0x02,
-  rx: 0x03,
-  ry: 0x04,
-  rz: 0x05,
-  hat0x: 0x10,
-  hat0y: 0x11
-} as const
-
-/** joydev's two ranges, in the order it walks them. From `joydev.c`. */
-const BTN_MISC = 0x100
-const BTN_JOYSTICK = 0x120
-const KEY_MAX = 0x2ff
-const ABS_CNT = 0x40
-
-/**
- * What one pad calls each joydev index.
- *
- * ── The bug this exists for ─────────────────────────────────────────────────
- *
- * The stick clicks used to be written down as joydev 9 and 10. That is right
- * for an Xbox pad on `xpad`, the USB driver, and wrong for the same pad over
- * **Bluetooth**, where it goes through `hid-microsoft` and declares the whole
- * BTN_A…BTN_THUMBR range — including the four codes `xpad` leaves out (BTN_C,
- * BTN_Z, BTN_TL2, BTN_TR2). joydev numbers the buttons a device declares in
- * ascending code order, so those four shift everything after them: L3 and R3
- * land on **13 and 14**, and 9 and 10 become two buttons that pad can never
- * press. The chord could not fire at all, in the exact configuration a launcher
- * used from a sofa is most likely to be in. A DualSense shifts differently
- * again — 11 and 12 — because it declares its triggers as buttons as well.
- *
- * So the numbering is asked for rather than assumed, per device and at open.
- *
- * ── Where the answer comes from ─────────────────────────────────────────────
- *
- * `JSIOCGBTNMAP` would give it directly and needs an ioctl, which is the one
- * thing this whole module is arranged to avoid. It is not needed: each node's
- * `device/capabilities/` directory under `/sys/class/input` publishes the same
- * capability bitmaps joydev itself builds the map from, and its algorithm is
- * eight lines long, so it is reproduced exactly rather than guessed at.
- */
-export interface PadLayout {
-  /** The evdev key code at each joydev button index. */
-  readonly buttons: readonly number[]
-  /** The evdev abs code at each joydev axis index. */
-  readonly axes: readonly number[]
-}
-
-/**
- * `unsigned long`, which is what the kernel prints these bitmaps in.
- *
- * A 32-bit process reading them on a 64-bit kernel gets `in_compat_syscall()`,
- * and the kernel splits each long into two 32-bit halves for it — so the width
- * follows *our* build rather than the machine's.
- */
-export const CAPABILITY_WORD_BITS = process.arch === 'ia32' || process.arch === 'arm' ? 32 : 64
-
-const HEX_WORD = /^[0-9a-f]+$/i
-
-/**
- * Reads one of the capability bitmaps a device publishes under sysfs.
- *
- * The format is a run of hex words, **most significant first**, and it has two
- * traps in it. Leading empty words are skipped entirely, so the word count
- * varies by device and cannot be used to locate anything; and the words that
- * are printed are not zero-padded, so `0` and `8000000000` are both one word.
- * Only the *last* word is at a known position — it is always word 0 — which is
- * why this indexes from the end.
- */
-export function parseCapabilityBitmap(
-  text: string,
-  wordBits: number = CAPABILITY_WORD_BITS
-): Set<number> {
-  const bits = new Set<number>()
-  const words = text.trim().split(/\s+/).filter((word) => word.length > 0)
-
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[words.length - 1 - index]
-    // A bitmap we cannot read is worse than none: it would produce a plausible
-    // layout with everything shifted. Refuse the whole thing instead.
-    if (!word || !HEX_WORD.test(word)) return new Set()
-
-    // BigInt rather than Number: a single word carries 64 bits and the top one
-    // of them is well past what a double can hold exactly.
-    const value = BigInt(`0x${word}`)
-    for (let bit = 0; bit < wordBits; bit += 1) {
-      if ((value >> BigInt(bit)) & 1n) bits.add(index * wordBits + bit)
-    }
-  }
-
-  return bits
-}
-
-/**
- * joydev's own ordering, from `joydev_connect()`.
- *
- * Buttons come in two passes: everything from BTN_JOYSTICK up, ascending, and
- * *then* the BTN_MISC block below it. The order is deliberate on the kernel's
- * part — it keeps a gamepad's face buttons at index 0 on a device that also
- * declares the older joystick codes. Axes are one pass, ascending, and the
- * d-pad is in there as a pair of axes rather than four buttons on most pads.
- */
-export function joydevLayout(keys: Iterable<number>, abs: Iterable<number>): PadLayout {
-  const ascending = (first: number, second: number): number => first - second
-  const codes = [...keys].sort(ascending)
-
-  return {
-    buttons: [
-      ...codes.filter((code) => code >= BTN_JOYSTICK && code <= KEY_MAX),
-      ...codes.filter((code) => code >= BTN_MISC && code < BTN_JOYSTICK)
-    ],
-    axes: [...abs].filter((code) => code < ABS_CNT).sort(ascending)
-  }
-}
-
-/**
- * What `xpad` produces, used when the capability bitmaps cannot be read.
- *
- * A guess, and named as one — but the *best* guess: it is the layout this file
- * assumed unconditionally until the Bluetooth case proved it was not universal,
- * so falling back to it can only leave a pad no worse off than before. The
- * caller says so in the log rather than letting a cursor that does not appear
- * be the only symptom.
- */
-export const XPAD_LAYOUT: PadLayout = {
-  buttons: [
-    EV_KEY.a,
-    EV_KEY.b,
-    EV_KEY.x,
-    EV_KEY.y,
-    EV_KEY.lb,
-    EV_KEY.rb,
-    EV_KEY.select,
-    EV_KEY.start,
-    EV_KEY.mode,
-    EV_KEY.l3,
-    EV_KEY.r3
-  ],
-  axes: [
-    EV_ABS.x,
-    EV_ABS.y,
-    // ABS_Z is the left trigger here, not the right stick. Getting this wrong
-    // once meant a cursor that drifted whenever a trigger rested off centre.
-    EV_ABS.z,
-    EV_ABS.rx,
-    EV_ABS.ry,
-    EV_ABS.rz,
-    EV_ABS.hat0x,
-    EV_ABS.hat0y
-  ]
-}
 
 // ── What the pad is doing, in terms nothing downstream has to decode ────────
 
@@ -371,31 +233,11 @@ export const PAD_READING_EMPTY: PadReading = {
 }
 
 /**
- * The d-pad codes for a pad that reports it as four buttons.
- *
- * Most report it as a pair of hat *axes* and this is unused; a DualSense on
- * `hid-playstation` reports it as BTN_DPAD_UP…RIGHT, which arrive as four more
- * joydev buttons after the gamepad block. Both have to fold to the same pair of
- * numbers or the on-screen keyboard is undrivable on half the pads in the room.
- */
-const EV_DPAD = { up: 0x220, down: 0x221, left: 0x222, right: 0x223 } as const
-
-/** The two axes a stick is on, or null when the device does not have both. */
-function stickPair(layout: PadLayout, x: number, y: number): { x: number; y: number } | null {
-  const first = layout.axes.indexOf(x)
-  const second = layout.axes.indexOf(y)
-  return first === -1 || second === -1 ? null : { x: first, y: second }
-}
-
-/**
  * Translates one device's raw sample through its layout.
  *
- * The right stick is the only judgement call in here, and it is the same one
- * SDL makes: **ABS_RX/ABS_RY when the device has both**, which is where `xpad`
- * and `hid-playstation` put it, and ABS_Z/ABS_RZ otherwise, which is where an
- * Xbox pad over Bluetooth puts it — that pad spends ABS_RX and ABS_RY on
- * nothing and its triggers on ABS_GAS and ABS_BRAKE. Reading the pair the wrong
- * way round means a page that scrolls when a trigger is squeezed.
+ * Where the right stick is, is the only judgement call, and `rightStick` in
+ * `@shared/padLayout` owns it — the browser translation asks the same question
+ * and two copies of the answer would disagree about one pad.
  *
  * The d-pad is resolved to the same pair of numbers whichever way the pad sends
  * it — hat axes on an Xbox pad, four buttons on a DualSense — because the thing
@@ -410,9 +252,9 @@ export function readPad(layout: PadLayout, state: PadSample): PadReading {
     if (code !== undefined) buttons.add(code)
   }
 
-  const left = stickPair(layout, EV_ABS.x, EV_ABS.y)
-  const right = stickPair(layout, EV_ABS.rx, EV_ABS.ry) ?? stickPair(layout, EV_ABS.z, EV_ABS.rz)
-  const hat = stickPair(layout, EV_ABS.hat0x, EV_ABS.hat0y)
+  const left = axisIndices(layout, EV_ABS.x, EV_ABS.y)
+  const right = rightStick(layout)
+  const hat = axisIndices(layout, EV_ABS.hat0x, EV_ABS.hat0y)
   const value = (index: number | undefined): number =>
     index === undefined ? 0 : (state.axes[index] ?? 0)
 
@@ -490,9 +332,17 @@ export const POINTER_ACTIONS_EVDEV: Readonly<Record<number, PointerActionName>> 
  * is in front. Outside it these two codes are unmapped and must stay that way:
  * with a bare cursor up the face buttons are a mouse.
  *
- * `EV_KEY.x` is `BTN_WEST` and `EV_KEY.y` is `BTN_NORTH` — codes, not indices,
- * for the reason the block above gives. The pad that broke L3 + R3 numbers
- * these differently again.
+ * `EV_KEY.x` is 0x133 and `EV_KEY.y` is 0x134 — codes, not indices, for the
+ * reason the block above gives. The pad that broke L3 + R3 numbers these
+ * differently again.
+ *
+ * **Do not reach for the compass aliases to check these.** `input-event-codes.h`
+ * defines 0x133 as `BTN_NORTH` *and* as `BTN_X`, and 0x134 as `BTN_WEST` *and*
+ * as `BTN_Y` — which is backwards from where those two are printed on an Xbox
+ * pad, where X is the western button and Y the northern one. The kernel's
+ * compass names are a historical mistake it cannot now correct. The letters are
+ * right, the compass is not, and this file uses the numbers so that neither can
+ * mislead anybody: 0x133 is whatever the pad calls the button an Xbox calls X.
  */
 export const COMPOSE_ACTIONS_EVDEV: Readonly<Record<number, ComposeActionName>> = {
   [EV_KEY.x]: 'space',
@@ -505,7 +355,13 @@ const INPUT_DIR = '/dev/input'
 const SYSFS_INPUT = '/sys/class/input'
 const JS_NODE = /^js\d+$/
 
-/** The joystick devices present right now. Empty is the normal case at boot. */
+/**
+ * The joystick devices present right now. Empty is the normal case at boot.
+ *
+ * `/dev/input` rather than `/sys/class/input`, unlike `listPadProfiles`: this
+ * one is the list of nodes about to be **opened**, and a node listed from
+ * sysfs that cannot be opened is a stream error rather than a device.
+ */
 export function listJoystickNodes(dir = INPUT_DIR): string[] {
   try {
     return readdirSync(dir)
@@ -515,38 +371,6 @@ export function listJoystickNodes(dir = INPUT_DIR): string[] {
     // No /dev/input at all, or no permission. Both mean "no pad here", which
     // is a state this has to survive rather than report.
     return []
-  }
-}
-
-/**
- * Asks the kernel what this device's buttons and axes actually are.
- *
- * Null when the bitmaps are missing or unreadable — a sandbox without `/sys`,
- * a node that went away between the readdir and here — and the caller falls
- * back to `XPAD_LAYOUT` out loud. Both files are read before either is trusted,
- * because half a layout is a shifted one.
- */
-export function readPadLayout(node: string, root = SYSFS_INPUT): PadLayout | null {
-  try {
-    const capabilities = `${root}/${node}/device/capabilities`
-    const keys = parseCapabilityBitmap(readFileSync(`${capabilities}/key`, 'utf8'))
-    const abs = parseCapabilityBitmap(readFileSync(`${capabilities}/abs`, 'utf8'))
-    const layout = joydevLayout(keys, abs)
-    // A device with no buttons or no axes is not one this can drive a cursor
-    // with, and an empty layout is also what a bitmap we failed to parse looks
-    // like. Either way it is not an answer.
-    return layout.buttons.length === 0 || layout.axes.length === 0 ? null : layout
-  } catch {
-    return null
-  }
-}
-
-/** The model name, for the one line the log gets per pad. Never a secret. */
-function readPadName(node: string, root = SYSFS_INPUT): string {
-  try {
-    return readFileSync(`${root}/${node}/device/name`, 'utf8').trim() || 'unnamed'
-  } catch {
-    return 'unnamed'
   }
 }
 
@@ -582,7 +406,7 @@ export function openPadReader(
    * device that produced them, so a second pad folding its button 9 into the
    * same set as the first pad's is two different buttons in one number.
    */
-  const open = new Map<string, { stream: ReadStream; layout: PadLayout; state: PadSample }>()
+  const open = new Map<string, { stream: ReadStream; profile: PadProfile; state: PadSample }>()
   let watcher: FSWatcher | null = null
   let closed = false
 
@@ -597,25 +421,25 @@ export function openPadReader(
       return
     }
 
-    const layout = readPadLayout(name, sysfs)
-    if (!layout) {
+    const profile = padProfileFor(name, sysfs)
+    if (profile.resolved === 'assumed') {
       console.warn(
         `Could not read ${sysfs}/${name}/device/capabilities; assuming the xpad ` +
           'button layout for it. If L3 + R3 does nothing with this pad, that guess is why.'
       )
     }
 
-    const entry = { stream, layout: layout ?? XPAD_LAYOUT, state: PAD_SAMPLE_EMPTY }
+    const entry = { stream, profile, state: PAD_SAMPLE_EMPTY }
     open.set(name, entry)
 
     // One line per pad, and it names the two numbers this module got wrong for
     // a release: with them in the log, "the chord does nothing" is one grep
     // rather than an afternoon with a kernel header.
-    const l3 = entry.layout.buttons.indexOf(EV_KEY.l3)
-    const r3 = entry.layout.buttons.indexOf(EV_KEY.r3)
+    const l3 = profile.buttons.indexOf(EV_KEY.l3)
+    const r3 = profile.buttons.indexOf(EV_KEY.r3)
     console.info(
-      `Pad ${name} (${readPadName(name, sysfs)}): ${entry.layout.buttons.length} buttons, ` +
-        `${entry.layout.axes.length} axes, ` +
+      `Pad ${name} (${profile.name}, ${profile.transport}): ${profile.buttons.length} buttons, ` +
+        `${profile.axes.length} axes, ` +
         (l3 === -1 || r3 === -1
           ? 'and no stick clicks at all — L3 + R3 cannot be pressed on this one'
           : `L3 + R3 at ${l3} and ${r3}`)
@@ -674,7 +498,7 @@ export function openPadReader(
   return {
     sample: () =>
       mergePadReadings(
-        [...open.values()].map((entry) => readPad(entry.layout, entry.state))
+        [...open.values()].map((entry) => readPad(layoutOfProfile(entry.profile), entry.state))
       ),
     connected: () => open.size,
     close: () => {

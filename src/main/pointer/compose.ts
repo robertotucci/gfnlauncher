@@ -4,13 +4,13 @@ import { IPC } from '@shared/ipc'
 import {
   COMPOSE_CURSOR_START,
   COMPOSE_DISPLAY,
-  COMPOSE_SHORTCUTS,
   buildComposeLayout,
   clampComposeCursor,
   composeButtonAt,
   composeButtons,
   composeLayoutFor,
   composeRows,
+  composeShortcuts,
   isComposeFunctionKey,
   moveComposeSelection,
   type ComposeCursor,
@@ -19,7 +19,8 @@ import {
   type ComposeView
 } from '@shared/keyboardLayout'
 import { accentValue, keyboardScaleValue } from '@shared/theme'
-import type { Direction } from '@shared/pointer'
+import type { PadFamily } from '@shared/padFamily'
+import { KEY_GRID_DEADZONE, type Direction } from '@shared/pointer'
 import type { PadAxes } from './evdev'
 
 /**
@@ -149,7 +150,7 @@ export function composeDirection(axes: PadAxes): Direction | null {
   if (axes.dpadX < 0) return 'left'
   if (axes.dpadX > 0) return 'right'
 
-  const gate = 0.5
+  const gate = KEY_GRID_DEADZONE
   if (Math.abs(axes.leftX) > Math.abs(axes.leftY)) {
     if (axes.leftX <= -gate) return 'left'
     if (axes.leftX >= gate) return 'right'
@@ -230,6 +231,15 @@ const REPEAT_INTERVAL_MS = 90
 export interface ComposeLook {
   readonly accentColor: string
   readonly keyboardScale: string
+  /**
+   * Which pad's letters go on the four keycaps that carry one.
+   *
+   * Here with the accent and the size because it is the same kind of fact: the
+   * appearance main knows and the window cannot ask for. It is resolved from
+   * the joystick nodes rather than from a `Gamepad.id`, since nothing on this
+   * path has a browser to ask.
+   */
+  readonly family: PadFamily
 }
 
 export interface ComposerDeps {
@@ -322,6 +332,10 @@ export function openComposer(deps: ComposerDeps): Composer {
   // open and somebody reading the log a week later wants them together.
   const accent = accentValue(deps.look?.accentColor)
   const scale = keyboardScaleValue(deps.look?.keyboardScale)
+  // Resolved once per window rather than per paint: the pad in the room does
+  // not change while somebody is typing a line with it, and the badges are read
+  // by the page from this object on every keystroke.
+  const shortcuts = composeShortcuts(deps.look?.family ?? 'xbox')
   console.info(
     `Compose keyboard layout: ${layout.name} (${layout.id}), ` +
       `accent ${deps.look?.accentColor ?? 'default'}, size ${Math.round(scale * 100)}%`
@@ -519,7 +533,7 @@ export function openComposer(deps: ComposerDeps): Composer {
         '',
       layout: state.layout.layers,
       display: COMPOSE_DISPLAY,
-      shortcuts: COMPOSE_SHORTCUTS,
+      shortcuts,
       accent,
       scale,
       rows: state.layout.layers[state.layer].length,

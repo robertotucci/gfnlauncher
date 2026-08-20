@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PAD_FAMILIES } from './padFamily'
 import {
   OSK_NAV_START,
   OSK_REPEAT_DELAY_MS,
@@ -9,6 +10,7 @@ import {
   oskChar,
   oskKeyAt,
   oskLabel,
+  oskShortcuts,
   stepOskNav,
   type OskCursor,
   type OskKey
@@ -251,5 +253,44 @@ describe('stepOskNav', () => {
   it('matches the timings the grid uses, so the two feel like one application', () => {
     expect(OSK_REPEAT_DELAY_MS).toBe(420)
     expect(OSK_REPEAT_INTERVAL_MS).toBe(90)
+  })
+})
+
+describe('oskShortcuts', () => {
+  it('badges only keys this keyboard actually has, on every pad', () => {
+    // The glyph is printed on the keycap, so a badge naming a key that is not
+    // drawn is a pad button advertised on nothing.
+    const kinds = new Set(OSK_ROWS.flat().map((key) => key.kind))
+    for (const family of PAD_FAMILIES) {
+      for (const kind of Object.keys(oskShortcuts(family))) {
+        expect(kinds.has(kind as (typeof OSK_ROWS)[number][number]['kind']), kind).toBe(true)
+      }
+    }
+  })
+
+  it('leaves the letters and Shift unbadged', () => {
+    // Every other key is "move the selection, press A", and stamping that on
+    // fifty-six caps would say nothing while making the legends unreadable.
+    expect(oskShortcuts('xbox').char).toBeUndefined()
+    expect(oskShortcuts('xbox').shift).toBeUndefined()
+  })
+
+  it('speaks the language of the pad in hand', () => {
+    // The bug: a DualSense was told to press X for a space and Y to send, and
+    // it has neither. These are positional — the left-hand face button and the
+    // top one — so the letters change and the fingers do not.
+    expect(oskShortcuts('xbox').space).toBe('X')
+    expect(oskShortcuts('playstation').space).toBe('□')
+    expect(oskShortcuts('nintendo').space).toBe('Y')
+    expect(oskShortcuts('nintendo').enter).toBe('X')
+  })
+
+  it('names the chord rather than a button on close, on every pad', () => {
+    // ☰ here does not close the keyboard, it ends pointer mode outright and
+    // takes the cursor with it. The honest label is the pair that puts the
+    // keyboard away, and it is the pair as *this* pad prints it.
+    expect(oskShortcuts('xbox').close).toBe('LB+RB')
+    expect(oskShortcuts('playstation').close).toBe('L1+R1')
+    expect(oskShortcuts('nintendo').close).toBe('L+R')
   })
 })

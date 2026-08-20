@@ -2,6 +2,9 @@ import { join } from 'node:path'
 import { ipcMain, type BrowserWindow, type WebContents } from 'electron'
 import { IPC } from '@shared/ipc'
 import { isPointerCommand, type PointerCommand, type PointerRestore } from '@shared/pointer'
+import { padFamilyOf, type PadFamily } from '@shared/padFamily'
+import { identityOfProfile, type PadProfile } from '@shared/padLayout'
+import { listPadProfiles } from '../padProfile'
 import {
   DEFAULT_ACCENT,
   DEFAULT_KEYBOARD_SCALE,
@@ -266,8 +269,28 @@ function pointerLook(): { accent: string; scale: number } {
   }
 }
 
+/**
+ * The pads, and the family both keyboards should name their buttons after.
+ *
+ * Read fresh rather than cached, and that is affordable because of *when* it is
+ * asked: a navigation in the sign-in window, a settings change, the compose
+ * window opening. A few small reads under `/sys` at each, against the
+ * alternative of a cache that is wrong for whoever plugged a pad in during the
+ * evening — and a window with no bridge cannot come back and ask again.
+ *
+ * The one gap it leaves is a pad connected *while* the sign-in window is
+ * already up and idle: its badges follow at the next navigation rather than
+ * within the second. The fix for that would be a watcher pushing on hot-plug,
+ * and it is not worth a permanently open inotify handle for a window that is on
+ * screen for a minute.
+ */
+function padSnapshot(): { pads: PadProfile[]; family: PadFamily } {
+  const pads = listPadProfiles()
+  return { pads, family: padFamilyOf(pads.map(identityOfProfile)) }
+}
+
 function restoreFor(id: number): PointerRestore {
-  return { active: active === id, ...pointerLook() }
+  return { active: active === id, ...pointerLook(), ...padSnapshot() }
 }
 
 export function updatePointerSettings(settings: Settings): void {
@@ -319,7 +342,8 @@ export function armPointerMode(
     ownWindowActive: isPointerActive,
     composeLook: () => ({
       accentColor: pointerSettings.accentColor,
-      keyboardScale: pointerSettings.keyboardScale
+      keyboardScale: pointerSettings.keyboardScale,
+      family: padSnapshot().family
     }),
     onMode: (modeActive) => {
       const window = getWindow()

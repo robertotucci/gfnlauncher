@@ -1,4 +1,4 @@
-import { Circle, Menu, Triangle, X } from 'lucide-react'
+import { Circle, Menu, Plus, Triangle, X } from 'lucide-react'
 import { describe, expect, it } from 'vitest'
 import type { GamepadAction } from '@/gamepad/intents'
 import { glyphFor } from './glyphs'
@@ -20,9 +20,22 @@ describe('glyphFor', () => {
     }
   })
 
-  it('draws the Start button as an icon on both pads', () => {
+  it('draws the Start button as an icon on every pad', () => {
     expect(glyphFor('start', 'xbox')?.icon).toBe(Menu)
     expect(glyphFor('start', 'playstation')?.icon).toBe(Menu)
+    expect(glyphFor('start', 'nintendo')?.icon).toBe(Plus)
+  })
+
+  it('relabels a Switch pad and does not remap it', () => {
+    // The bottom button still confirms — that is what `confirm` means, on this
+    // pad as on every other — and on this one it is printed B. Swapping the
+    // action instead would move the press under somebody's thumb every time
+    // they changed controller, and would take the mouse click in pointer mode
+    // with it.
+    expect(glyphFor('confirm', 'nintendo')?.label).toBe('B')
+    expect(glyphFor('back', 'nintendo')?.label).toBe('A')
+    expect(glyphFor('search', 'nintendo')?.label).toBe('Y')
+    expect(glyphFor('menu', 'nintendo')?.label).toBe('X')
   })
 
   it('falls back to the keyboard binding when no pad is in hand', () => {
@@ -48,6 +61,7 @@ describe('glyphFor', () => {
     // meant the strip lost its hints the moment a pad was unplugged.
     expect(glyphFor('pageLeft', 'xbox')?.label).toBe('LB')
     expect(glyphFor('pageLeft', 'playstation')?.label).toBe('L1')
+    expect(glyphFor('pageLeft', 'nintendo')?.label).toBe('L')
     expect(glyphFor('pageLeft', 'keyboard')?.label).toBe('[')
     expect(glyphFor('pageRight', 'keyboard')?.label).toBe(']')
   })

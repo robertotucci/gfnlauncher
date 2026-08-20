@@ -1,3 +1,4 @@
+import { PAD_BUTTON_NAMES, type PadFamily } from './padFamily'
 import type { Direction } from './pointer'
 
 /**
@@ -149,18 +150,24 @@ export const COMPOSE_DISPLAY: Readonly<Record<string, string>> = {
  * the shoulders are the chord that closes the keyboard, and the face buttons
  * are spent.
  *
- * Data rather than literals in the stylesheet so a second pad family is a
- * change here — the launcher already resolves ✕ / △ from the pad id in
- * `glyphFor`, and this is where that would arrive.
+ * Data rather than literals in the stylesheet, and **a function of the pad**
+ * rather than data: it was a fixed Xbox table, so a DualSense was told to press
+ * X for a space and Y to send, and it has neither of those. `PAD_BUTTON_NAMES`
+ * decides the letters now, positionally — `west` is the left-hand face button,
+ * X on an Xbox pad, □ on a Sony one, Y on a Switch one — and the same call
+ * dresses the preload's keyboard, so the two cannot disagree.
  *
  * `keyboardLayout.test.ts` pins that every key named here is a function key the
- * layout actually draws, so a badge cannot outlive its key.
+ * layout actually draws, on every family, so a badge cannot outlive its key.
  */
-export const COMPOSE_SHORTCUTS: Readonly<Record<string, string>> = {
-  '{space}': 'X',
-  '{bksp}': 'B',
-  '{enter}': 'Y',
-  '{close}': '☰'
+export function composeShortcuts(family: PadFamily): Readonly<Record<string, string>> {
+  const names = PAD_BUTTON_NAMES[family]
+  return {
+    '{space}': names.west,
+    '{bksp}': names.east,
+    '{enter}': names.north,
+    '{close}': names.start
+  }
 }
 
 /**
@@ -206,7 +213,7 @@ export interface ComposeView {
   readonly selected: string
   readonly layout: ComposeLayout['layers']
   readonly display: Readonly<Record<string, string>>
-  /** `COMPOSE_SHORTCUTS`, as one CSS custom property per key. */
+  /** `composeShortcuts(family)`, as one CSS custom property per key. */
   readonly shortcuts: Readonly<Record<string, string>>
   /** A CSS colour from `accentValue`, assigned to `--accent`. */
   readonly accent: string
