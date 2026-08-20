@@ -21,6 +21,25 @@ vi.mock('electron', () => ({
   screen: { getDisplayMatching: () => ({ workAreaSize: { width: 1920, height: 1080 } }) }
 }))
 
+/**
+ * **The pad list has to be a stub, because the real one reads `/sys`.**
+ *
+ * `padSnapshot` in `index.ts` calls `listPadProfiles()`, which walks
+ * `/sys/class/input` on whatever machine the suite happens to be running on.
+ * Left real, the replay payloads asserted below carry whatever is plugged in —
+ * so the file passed on a developer machine with no controller attached and
+ * failed the moment one was, and failed on CI too, where the runner's own
+ * virtual input devices are enough to be read as a pad.
+ *
+ * Empty rather than a fixture: the subject here is the replay channel, and what
+ * these tests pin is that a payload is delivered to the right document at the
+ * right moment. `padLayout.test.ts` and `padProfile.test.ts` are where the
+ * profiles themselves are asserted, against `padFixtures.ts`.
+ */
+vi.mock('../padProfile', () => ({
+  listPadProfiles: () => []
+}))
+
 const { registerPointerTarget, isPointerActive, updatePointerSettings } = await import('./index')
 const { IPC } = await import('@shared/ipc')
 const { DEFAULT_SETTINGS } = await import('@shared/types')
