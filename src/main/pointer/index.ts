@@ -1,7 +1,13 @@
 import { join } from 'node:path'
 import { ipcMain, type BrowserWindow, type WebContents } from 'electron'
 import { IPC } from '@shared/ipc'
-import { isPointerCommand, type PointerCommand } from '@shared/pointer'
+import { isPointerCommand, type PointerCommand, type PointerRestore } from '@shared/pointer'
+import {
+  DEFAULT_ACCENT,
+  DEFAULT_KEYBOARD_SCALE,
+  accentValue,
+  keyboardScaleValue
+} from '@shared/theme'
 import type { Settings } from '@shared/types'
 import { armDesktopPointer, type DesktopPointer } from './desktop'
 
@@ -94,8 +100,24 @@ function apply(contents: WebContents, label: string, command: PointerCommand): v
       // Only the window that owns the mode may end it, so a stale "off" from a
       // document that has already been navigated away from cannot take the
       // cursor out from under the one that replaced it.
-      if (command.active) active = contents.id
-      else if (active === contents.id) active = null
+      if (command.active) {
+        active = contents.id
+        /**
+         * One cursor at a time, decided here because here is the side that can
+         * be sure.
+         *
+         * `armDesktopPointer` asks `ownWindowActive()` before it opens and that
+         * question races this message: both backends read the same chord off
+         * the same pad, milliseconds apart, and the desktop one then spends
+         * another few hundred opening a portal session. Whichever answered
+         * first won, so a chord held with the sign-in window in front could
+         * raise *two* cursors — the page's own and a compositor one over the
+         * top of it. A window of ours being in front is the whole reason the
+         * desktop backend defers, so when one says it has the pointer, the
+         * other stops, whatever order they got there in.
+         */
+        desktop?.stop('a window of ours took the pointer')
+      } else if (active === contents.id) active = null
       // One line per transition, never per frame: this file is read a week
       // later by somebody working out why a cursor did or did not appear.
       console.info(`Pointer mode ${command.active ? 'on' : 'off'} in ${label}`)
@@ -175,7 +197,7 @@ export function registerPointerTarget(window: BrowserWindow, label: string): voi
    */
   contents.on('did-finish-load', () => {
     if (contents.isDestroyed()) return
-    contents.send(IPC.pointerRestore, active === contents.id)
+    contents.send(IPC.pointerRestore, restoreFor(contents.id))
   })
 
   window.on('closed', () => {
@@ -213,22 +235,57 @@ export function isPointerActive(): boolean {
 let desktop: DesktopPointer | null = null
 
 /**
- * A snapshot of the two settings the desktop backend reads.
+ * A snapshot of the four settings this module and the desktop backend read.
  *
  * A snapshot rather than an `await getSettings()` at each use, because the
  * chord is handled inside a 60 Hz tick and nothing there may be asynchronous.
  * `updatePointerSettings` keeps it in step from the settings IPC handler, which
  * is the one place a change can come from.
+ *
+ * Two of them are permission and session state and two are **appearance** —
+ * both keyboards this mode can raise are drawn outside the launcher's renderer,
+ * so the accent and the keyboard size have no other route to them. Anything
+ * else the pointer needs from settings belongs here too rather than arriving by
+ * a fifth path; that is what keeps one rule instead of several.
  */
-let pointerSettings: Pick<Settings, 'pointerDesktop' | 'pointerRestoreToken'> = {
+let pointerSettings: Pick<
+  Settings,
+  'pointerDesktop' | 'pointerRestoreToken' | 'accentColor' | 'keyboardScale'
+> = {
   pointerDesktop: false,
-  pointerRestoreToken: null
+  pointerRestoreToken: null,
+  accentColor: DEFAULT_ACCENT,
+  keyboardScale: DEFAULT_KEYBOARD_SCALE
+}
+
+/** What both keyboards are drawn with, resolved from the ids we store. */
+function pointerLook(): { accent: string; scale: number } {
+  return {
+    accent: accentValue(pointerSettings.accentColor),
+    scale: keyboardScaleValue(pointerSettings.keyboardScale)
+  }
+}
+
+function restoreFor(id: number): PointerRestore {
+  return { active: active === id, ...pointerLook() }
 }
 
 export function updatePointerSettings(settings: Settings): void {
   pointerSettings = {
     pointerDesktop: settings.pointerDesktop,
-    pointerRestoreToken: settings.pointerRestoreToken
+    pointerRestoreToken: settings.pointerRestoreToken,
+    accentColor: settings.accentColor,
+    keyboardScale: settings.keyboardScale
+  }
+
+  // Pushed rather than left for the next navigation. The sign-in window can be
+  // open while the accent is changed from the Settings screen behind it, and a
+  // keyboard still wearing the old one would be the one part of the launcher
+  // that did not follow. Costs one message per open target, on a channel that
+  // fires a handful of times a session.
+  for (const [id, target] of targets) {
+    if (target.contents.isDestroyed()) continue
+    target.contents.send(IPC.pointerRestore, restoreFor(id))
   }
 
   // Applied now, not at the next start. Off has to end a session that is
@@ -260,6 +317,10 @@ export function armPointerMode(
       persistToken(token)
     },
     ownWindowActive: isPointerActive,
+    composeLook: () => ({
+      accentColor: pointerSettings.accentColor,
+      keyboardScale: pointerSettings.keyboardScale
+    }),
     onMode: (modeActive) => {
       const window = getWindow()
       if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {

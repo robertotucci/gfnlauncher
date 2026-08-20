@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { DEFAULT_SETTINGS, isLaunchMode, type Settings } from '@shared/types'
-import { isAccentId, isScaleId } from '@shared/theme'
+import { isAccentId, isKeyboardScaleId, isScaleId } from '@shared/theme'
 import { writeFileAtomic } from './atomicFile'
 import { isAutostartEnabled, setAutostart } from './autostart'
 
@@ -33,6 +33,13 @@ function sanitise(raw: unknown): Settings {
     // Same reasoning one step further: this one becomes an argument to
     // `setZoomFactor`, where an arbitrary number is an unusable window.
     uiScale: isScaleId(input.uiScale) ? input.uiScale : DEFAULT_SETTINGS.uiScale,
+    // Its own guard and **not** `isScaleId`: the two preset lists share only
+    // "100", so borrowing the interface one here would reject every step the
+    // keyboard row can produce and pin the user at 100% for ever — saving
+    // nothing, reporting nothing. `theme.test.ts` pins that they differ.
+    keyboardScale: isKeyboardScaleId(input.keyboardScale)
+      ? input.keyboardScale
+      : DEFAULT_SETTINGS.keyboardScale,
     locale: typeof input.locale === 'string' ? input.locale : DEFAULT_SETTINGS.locale,
     gfnLinked: typeof input.gfnLinked === 'boolean' ? input.gfnLinked : DEFAULT_SETTINGS.gfnLinked,
     updateCheck:

@@ -105,6 +105,22 @@ finish-args:
   - --talk-name=org.freedesktop.PowerManagement
   - --talk-name=org.freedesktop.ScreenSaver
 
+  # ── Typing outside our own windows ──────────────────────────────────────────
+  # LB + RB in pointer mode (src/main/pointer/systemKeyboard.ts). Our own
+  # on-screen keyboard is drawn by a preload into a page we own, so it cannot
+  # follow the cursor onto the desktop or into a game — an Electron overlay was
+  # measured on KDE Wayland and takes the focus, which is exactly what decides
+  # where a keystroke lands. KWin's keyboard is a layer-shell surface and does
+  # not, so the request is forwarded to it: one property read, one
+  # `forceActivate`, and the pad clicks its keys with the cursor it already has.
+  #
+  # KDE-only, and deliberately not fatal anywhere else. `available` comes back
+  # false on a session without a virtual keyboard and the name is simply absent
+  # on a compositor that is not KWin; both end at the same place, one line in
+  # the log naming the package to install. Revoking it looks like the latter and
+  # the message says how to put it back.
+  - --talk-name=org.kde.KWin
+
   # ── Pairing a Bluetooth device ──────────────────────────────────────────────
   # BlueZ (src/main/bluetooth/), and the only name this application needs on the
   # *system* bus. Everything the Devices screen does — enumerate, discover,

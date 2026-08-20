@@ -1,0 +1,419 @@
+/*
+ * The composed keyboard's own stylesheet.
+ *
+ * Plain CSS rather than Tailwind: this page is not the launcher's UI, it has no
+ * React and no design system in it, and pulling the whole token layer in for one
+ * panel would make a second place where the theme has to be kept true.
+ *
+ * ── What makes this read as a keyboard ──────────────────────────────────────
+ *
+ * Geometry, not texture. There is no bevel here, no gradient and no shadow under
+ * a key: a keyboard is recognised from its **plan** — the stagger between rows
+ * and the widths of the keys that are not letters — and that is what the rules
+ * below spend their effort on. Every surface is flat, and the only things that
+ * separate a keycap from the deck it sits in are a fill and a hairline.
+ *
+ * ── Everything is one unit ──────────────────────────────────────────────────
+ *
+ * `--u` is a key. The caption, the field, the legends, the gaps and the badges
+ * are all fractions of it, so the size setting moves the whole panel coherently
+ * and there is exactly one number to reason about. Four values arrive from main
+ * and nothing else is dynamic: the accent, the size, the row count and how much
+ * of the bottom of this window is unusable.
+ */
+
+:root {
+  /*
+   * Pushed from main on the first view. The defaults are the ones that must be
+   * correct on the frame *before* it arrives: white is the launcher's default
+   * accent, so nothing flashes a colour the user did not choose; five rows is
+   * the US layout; zero inset is a window the compositor placed correctly.
+   */
+  --accent: oklch(0.985 0 0);
+  --kb-scale: 1;
+  --rows: 5;
+  --safe-bottom: 0px;
+
+  /*
+   * **Two units, not one, and the keys are wider than they are tall.**
+   *
+   * Square caps were the first build and they cost too much: at 100% the panel
+   * was two thirds of the screen and at 80% it was still half of it, which on a
+   * keyboard that opens *over* the field being filled in is the wrong trade
+   * outright. A keycap is square because a finger is round; nothing here is
+   * pressed with a finger, the legend is one character, and the height above
+   * and below it was doing no work at all.
+   *
+   * So `--u` sizes the keyboard **across** and `--h` sizes it **down**, and the
+   * panel is a wide flat band rather than a block. Horizontal spacing and the
+   * key widths come off `--u`; every type size and every vertical measure comes
+   * off `--h`, because `--h` is the dimension the legends have to fit inside.
+   */
+  --u: min(
+    /* The size it wants to be, and what the size setting moves. */ calc(var(--kb-scale) * 96px),
+    /* Smaller screens get smaller keys rather than a clipped keyboard. */
+      calc(var(--kb-scale) * 6.4vw),
+    /*
+     * And it can never be wider than the screen. 14.7 is the deck in units:
+     * thirteen keys, twelve gaps, and the half unit row two hangs off the right
+     * edge — change the stagger or the widths and this changes with them.
+     */ calc(92vw / 14.7)
+  );
+  /*
+   * The second term is a hard ceiling rather than a preference: it is what makes
+   * a panel taller than the window impossible at any size setting. Per row,
+   * because the Italian layout draws six to the US layout's five, and outside
+   * `--kb-scale`, because a user who asks for 130% must get a keyboard that
+   * still fits rather than one whose last row is off the screen.
+   */
+  --h: min(calc(var(--u) * 0.52), calc(34vh / var(--rows)));
+  --gap: calc(var(--u) * 0.08);
+  --vgap: calc(var(--h) * 0.16);
+
+  /* Four surfaces, and each one names a physical thing. */
+  --deck: #14171d;
+  --cap: #1e232b;
+  --cap-fn: #171b22;
+  /*
+   * Recessed, but only just. A true black well next to a deck this dark reads
+   * as a hole cut in the panel and out-weighs the keyboard underneath it — and
+   * the keyboard is the thing being used. It doubles as the text colour on a
+   * selected key, which is why it stays far below any accent's lightness.
+   */
+  --well: #0d1016;
+
+  --line: rgba(250, 250, 250, 0.1);
+  --text: #f0f1f3;
+  --legend2: #8b919c;
+
+  --sans: 'Geist Variable', system-ui, sans-serif;
+  --mono: 'Geist Mono Variable', ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * The window is the size of the screen and see-through, because a Wayland
+ * client cannot place its own window — so the *stylesheet* is what puts the
+ * keyboard along the bottom edge and in the middle, which is where every
+ * on-screen keyboard on every device is. The thing being typed into is above
+ * it; a panel in the centre of the screen covers the field being filled in.
+ */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  margin: 0;
+  /*
+   * How much of the bottom of this window we were not given, measured in main
+   * from the size the compositor actually handed back. It is a panel we are
+   * under, or a screen edge we are past, or zero — the page does not need to
+   * know which, and could not find out.
+   */
+  padding: 0 0 var(--safe-bottom);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--sans);
+  user-select: none;
+}
+
+/* The chassis. Everything visible is in here, and this is the part that is opaque. */
+.panel {
+  width: max-content;
+  max-width: 100vw;
+  padding: calc(var(--u) * 0.2) calc(var(--u) * 0.26) calc(var(--u) * 0.24);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 14px 14px 0 0;
+  background: var(--deck);
+}
+
+/*
+ * One line for both pieces of prose, and that is a height saving as much as a
+ * tidying: they say the same kind of thing — what this is and how to drive it —
+ * and stacked they cost two rows above a keyboard that is already tall.
+ */
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 0.4);
+  margin: 0 0 calc(var(--u) * 0.13);
+  /*
+   * A floor, here and on the two rules below.
+   *
+   * Flattening the keys pulled every type size down with `--h`, and at the 80%
+   * setting the smallest of them landed under 13px — below the launcher's own
+   * `text-xs`, which is the floor for something read from three metres. The
+   * setting is allowed to make the keyboard small; it is not allowed to make
+   * the words on it unreadable, so past that point it stops scaling them.
+   */
+  font-size: max(13px, calc(var(--h) * 0.34));
+  color: var(--legend2);
+}
+
+.caption {
+  margin: 0;
+}
+
+/*
+ * Two entries, and only two.
+ *
+ * The other four — space, send, delete, cancel — are printed on the keycaps
+ * that do them, which is where a shortcut belongs. What is left is the pair
+ * that cannot be printed on any one key, because they are about the keyboard
+ * rather than about a key.
+ */
+.legend {
+  display: flex;
+  gap: calc(var(--u) * 0.28);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.legend b {
+  margin-right: calc(var(--u) * 0.09);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Recessed rather than raised: it is a well the text sits in. */
+.field {
+  display: flex;
+  align-items: center;
+  min-height: calc(var(--h) * 1.2);
+  padding: 0 calc(var(--u) * 0.2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--well);
+  font-family: var(--mono);
+  font-size: calc(var(--h) * 0.62);
+  word-break: break-all;
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: calc(var(--h) * 0.72);
+  margin-left: 2px;
+  background: var(--accent);
+  animation: caret 1.06s step-end infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── simple-keyboard, dressed as hardware ───────────────────────────────────── */
+
+/*
+ * `max-content`, so the deck is exactly as wide as its widest row and the panel
+ * around it follows. The library's own `overflow: hidden` has to go with it: the
+ * selected key is drawn slightly larger and carries a ring outside its own box,
+ * and hidden overflow shears both off at the left and right edges.
+ */
+.simple-keyboard.hg-theme-default {
+  width: max-content;
+  max-width: 100vw;
+  margin-top: calc(var(--u) * 0.16);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.simple-keyboard.hg-theme-default .hg-row {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--gap);
+}
+
+/* The library spaces keys with a margin. This one uses `gap`, so it must go. */
+.simple-keyboard.hg-theme-default .hg-row .hg-button:not(:last-child) {
+  margin-right: 0;
+}
+
+/* Down the page, so it follows the flattened key rather than its width. */
+.simple-keyboard.hg-theme-default .hg-row:not(:last-child) {
+  margin-bottom: var(--vgap);
+}
+
+/*
+ * The stagger, which is the single most recognisable thing about the object.
+ *
+ * Rows one to four are always the layout's own faithful rows —
+ * `buildComposeLayout` emits four of them, then an optional row of characters
+ * the physical layout cannot reach, then the function row — so these three
+ * selectors are exact for every layout and need nothing from main.
+ *
+ * The offsets are smaller than a real board's, and deliberately: on a real
+ * keyboard the Q row starts 1.5u in because a Tab key is sitting there, and
+ * there is no Tab key here. What is being reproduced is the *silhouette*, not
+ * the measurement.
+ */
+.simple-keyboard.hg-theme-default .hg-row:nth-child(2) {
+  padding-left: calc(var(--u) * 0.5);
+}
+
+.simple-keyboard.hg-theme-default .hg-row:nth-child(3) {
+  padding-left: calc(var(--u) * 0.75);
+}
+
+.simple-keyboard.hg-theme-default .hg-row:nth-child(4) {
+  padding-left: calc(var(--u) * 1.25);
+}
+
+/*
+ * The characters a physical layout cannot produce, added for Italian and absent
+ * for US. Centred and unstaggered, because it is not part of any keyboard and
+ * must not pretend to be one of its rows.
+ */
+.simple-keyboard.hg-theme-default .hg-row:nth-child(5):not(:last-child) {
+  justify-content: center;
+  margin-top: calc(var(--vgap) * 1.6);
+}
+
+/* The modifier row, set apart the way it is on a real board. */
+.simple-keyboard.hg-theme-default .hg-row:last-child {
+  margin-top: calc(var(--vgap) * 1.6);
+}
+
+.simple-keyboard.hg-theme-default .hg-button {
+  position: relative;
+  /* One unit across, no growing: a keyboard whose keys stretch to fill is a
+     grid. Down the page it is `--h`, which is the whole of why this fits. */
+  flex: 0 0 var(--u);
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  height: var(--h);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--cap);
+  color: var(--text);
+  box-shadow: none;
+  font-family: var(--mono);
+  font-size: calc(var(--h) * 0.52);
+  font-weight: 500;
+}
+
+/*
+ * The widths that make the bottom row a keyboard's bottom row.
+ *
+ * They sum to exactly thirteen units plus the eight gaps they swallow, which is
+ * the width of the top row — so the modifier row is flush with the block above
+ * it rather than a wider strip underneath it. Change one and change another.
+ */
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{shift}'],
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{bksp}'],
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{enter}'],
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{close}'] {
+  flex-basis: calc(var(--u) * 2 + var(--gap));
+}
+
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{space}'] {
+  flex-basis: calc(var(--u) * 5 + var(--gap) * 4);
+}
+
+/*
+ * Keys with a word on them, in the darker colourway a keycap set gives its
+ * modifiers. It is the only thing separating them from the characters, which is
+ * how a real set does it too — and it does a second job here: the five keys that
+ * are not characters are the five a person has to find rather than scan for.
+ */
+.simple-keyboard.hg-theme-default .hg-button.hg-functionBtn {
+  background: var(--cap-fn);
+  color: var(--legend2);
+  font-size: max(13px, calc(var(--h) * 0.32));
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+/*
+ * The pad button that reaches this key without walking to it.
+ *
+ * Top right rather than the top left a real cap puts its secondary legend in:
+ * top left is where the shifted character would go, and on this keyboard that
+ * is a real thing rather than a decoration. The content comes from a custom
+ * property main writes, so a different pad family is a change in data.
+ */
+.simple-keyboard.hg-theme-default .hg-button::after {
+  content: var(--sc, '');
+  position: absolute;
+  top: calc(var(--h) * 0.09);
+  right: calc(var(--u) * 0.08);
+  color: var(--legend2);
+  font-family: var(--sans);
+  font-size: max(11px, calc(var(--h) * 0.27));
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{space}'] {
+  --sc: var(--sc-space);
+}
+
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{bksp}'] {
+  --sc: var(--sc-bksp);
+}
+
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{enter}'] {
+  --sc: var(--sc-enter);
+}
+
+.simple-keyboard.hg-theme-default .hg-button[data-skbtn='{close}'] {
+  --sc: var(--sc-close);
+}
+
+/* A click, from the cursor that is on screen when this opens. */
+.simple-keyboard.hg-theme-default .hg-button:active,
+.simple-keyboard.hg-theme-default .hg-button.hg-activeButton {
+  background: color-mix(in oklab, var(--accent) 22%, var(--cap));
+}
+
+/*
+ * Where the pad is. Declared last so it wins over the states above — the
+ * selection is the only thing on this screen a person navigates by, and a
+ * pressed-key colour taking it away for a frame is a keyboard that flickers
+ * about where it is.
+ *
+ * The launcher's own focused-chip treatment, written out in plain CSS: accent
+ * fill, dark text, a ring with an offset, and the same small step up in size.
+ * The ring is two box-shadows because there is no Tailwind here to spell it.
+ * Every accent preset is held at lightness ≥ 0.80 in `@shared/theme`, which is
+ * what guarantees `--well` stays readable on top of whichever one is set.
+ */
+.simple-keyboard.hg-theme-default .hg-button.sk-selected {
+  z-index: 1;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--well);
+  box-shadow:
+    0 0 0 2px var(--deck),
+    0 0 0 4px var(--accent);
+  transform: scale(1.04);
+}
+
+.simple-keyboard.hg-theme-default .hg-button.sk-selected::after {
+  color: var(--well);
+  opacity: 0.65;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}

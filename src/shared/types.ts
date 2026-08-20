@@ -7,7 +7,7 @@
 
 import type { BluetoothAction } from './bluetooth'
 import type { ScreenOwnership } from './input'
-import { DEFAULT_ACCENT, DEFAULT_UI_SCALE } from './theme'
+import { DEFAULT_ACCENT, DEFAULT_KEYBOARD_SCALE, DEFAULT_UI_SCALE } from './theme'
 
 /** A digital store that GeForce NOW can link to and sync a library from. */
 export interface GameStore {
@@ -326,6 +326,15 @@ export interface Settings {
    * `webContents.setZoomFactor`.
    */
   uiScale: string
+  /**
+   * Id of a `KEYBOARD_SCALE_PRESETS` entry in `@shared/theme`, applied as
+   * `--kb-scale` on the on-screen keyboard and on nothing else.
+   *
+   * Separate from `uiScale` because it sizes a keyboard rather than an
+   * interface, and the two are drawn in different processes — see the note on
+   * the presets. A CSS multiplier, not a zoom factor.
+   */
+  keyboardScale: string
   locale: string
   /**
    * Whether the user has signed in at least once. Not a preference and not
@@ -388,6 +397,7 @@ export const DEFAULT_SETTINGS: Settings = {
   launchMode: 'native',
   accentColor: DEFAULT_ACCENT,
   uiScale: DEFAULT_UI_SCALE,
+  keyboardScale: DEFAULT_KEYBOARD_SCALE,
   locale: 'en_US',
   gfnLinked: false,
   updateCheck: true,

@@ -32,14 +32,34 @@ describe('keysymForChar', () => {
     expect(missing).toEqual([])
   })
 
-  it('refuses anything outside printable ASCII', () => {
+  it('sends the accented letters a national layout draws', () => {
+    // The compose keyboard follows the session's own layout, so on an Italian
+    // one it draws è, à and ò — and a key that types nothing is worse than a
+    // key that was never offered. Latin-1 keysyms are the code point, exactly
+    // as ASCII ones are.
+    expect(keysymForChar('è')).toBe(0xe8)
+    expect(keysymForChar('à')).toBe(0xe0)
+    expect(keysymForChar('£')).toBe(0xa3)
+    expect(keysymForChar('§')).toBe(0xa7)
+  })
+
+  it('escapes to the Unicode keysym range above Latin-1', () => {
+    // X11's own convention for everything it has no keysym of its own for.
+    expect(keysymForChar('€')).toBe(0x0100_20ac)
+    // One emoji is one character and two code units; it must not read as two.
+    expect(keysymForChar('\u{1f44d}')).toBe(0x0101_f44d)
+  })
+
+  it('refuses anything that is not one printable character', () => {
     // The range check is the guard: without it any string reaching this becomes
     // an arbitrary keysym handed to the compositor.
-    expect(keysymForChar('è')).toBeNull()
     expect(keysymForChar('\n')).toBeNull()
-    expect(keysymForChar('')).toBeNull()
+    expect(keysymForChar('\u0000')).toBeNull()
+    // The C1 block, which is control characters wearing high code points.
+    expect(keysymForChar('\u0085')).toBeNull()
     expect(keysymForChar('')).toBeNull()
     expect(keysymForChar('ab')).toBeNull()
+    expect(keysymForChar('\u{1f44d}\u{1f44d}')).toBeNull()
   })
 })
 

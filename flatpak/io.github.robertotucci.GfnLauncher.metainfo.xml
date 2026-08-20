@@ -115,15 +115,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.1.3" date="2026-08-19">
+    <release version="0.1.3" date="2026-08-20">
       <description>
-        <p>Bluetooth devices can now be paired from the launcher, without leaving it for the desktop.</p>
+        <p>LB + RB now types outside the launcher too — on the desktop, and inside a running game. Bluetooth devices can be paired from the launcher.</p>
         <ul>
-          <li>Settings has a Devices screen: what you have already paired, and what is in the room. Scan, press A on a row to pair it, again to connect or disconnect, X to forget</li>
-          <li>The pairing is the system's own — the launcher drives BlueZ the way your desktop's Bluetooth panel does — so a pad paired here works everywhere and comes back after a restart</li>
-          <li>Nearby devices are ordered by signal strength, so the one in your hand is at the top, and rows show a battery figure for the devices that report one</li>
-          <li>The on-screen keyboard in pointer mode moved from X to LB + RB, because with a cursor up the face buttons read as mouse buttons</li>
-          <li>A failed update no longer stretches its own dialog off the edge of the screen</li>
+          <li>Write the whole line with the pad, press SEND, and it is typed into whatever was in front — including a login box inside a streamed game</li>
+          <li>The pad button that reaches a key is printed on the key: A presses, X is space, Y sends, B deletes, ☰ discards</li>
+          <li>It is your keyboard — QWERTY in your session's own layout, accented letters included, laid out like a keyboard rather than a grid of tiles</li>
+          <li>Keyboard size is a new setting under Appearance, and the selected key now wears your accent colour</li>
+          <li>Settings has a Devices screen for Bluetooth: scan, press A on a row to pair it, again to connect or disconnect, X to forget. The pairing is the system's own, so a pad paired here works everywhere</li>
+          <li>Fixed: the cursor chord L3 + R3 with a pad connected over Bluetooth, and the last row of the on-screen keyboard being cut off at the bottom of the screen</li>
         </ul>
       </description>
       <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.3</url>

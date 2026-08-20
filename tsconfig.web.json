@@ -25,6 +25,7 @@
   },
   "include": [
     "src/renderer/src/**/*",
+    "src/renderer/compose/**/*",
     "src/preload/index.d.ts",
     "src/shared/**/*"
   ]

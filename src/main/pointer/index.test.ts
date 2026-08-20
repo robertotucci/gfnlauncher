@@ -13,11 +13,34 @@ vi.mock('electron', () => ({
     on(channel: string, handler: (event: unknown, payload: unknown) => void) {
       handlers.set(channel, handler)
     }
-  }
+  },
+  // Reached through `desktop.ts` → `compose.ts`, which opens the keyboard
+  // window. Named here rather than left off: a missing named export is a
+  // module that will not load at all, and the failure names the wrong file.
+  BrowserWindow: class {},
+  screen: { getDisplayMatching: () => ({ workAreaSize: { width: 1920, height: 1080 } }) }
 }))
 
-const { registerPointerTarget, isPointerActive } = await import('./index')
+const { registerPointerTarget, isPointerActive, updatePointerSettings } = await import('./index')
 const { IPC } = await import('@shared/ipc')
+const { DEFAULT_SETTINGS } = await import('@shared/types')
+
+/**
+ * What a replay looks like.
+ *
+ * The mode is what these tests are about; the accent and the size ride along
+ * because the preload cannot read settings and this is its only channel. Spelt
+ * out rather than matched loosely, so the assertion pins that the look really
+ * is on this message — a bare `active` would pass with the look silently
+ * dropped, and the symptom of that is a keyboard in the wrong colour, which no
+ * test would then catch.
+ */
+function restore(active: boolean): { channel: string; payload: unknown } {
+  return {
+    channel: IPC.pointerRestore,
+    payload: { active, accent: 'oklch(0.985 0 0)', scale: 1 }
+  }
+}
 
 interface SentEvent {
   type: string
@@ -250,7 +273,7 @@ describe('the mode, and the way out of it', () => {
 
     target.navigate()
 
-    expect(target.pushed).toEqual([{ channel: IPC.pointerRestore, payload: true }])
+    expect(target.pushed).toEqual([restore(true)])
   })
 
   it('replays "off" into a document of a window that never turned it on', () => {
@@ -259,7 +282,7 @@ describe('the mode, and the way out of it', () => {
 
     target.navigate()
 
-    expect(target.pushed).toEqual([{ channel: IPC.pointerRestore, payload: false }])
+    expect(target.pushed).toEqual([restore(false)])
   })
 
   it('does not replay another window’s mode into this one', () => {
@@ -271,7 +294,25 @@ describe('the mode, and the way out of it', () => {
     send(702, { kind: 'mode', active: true })
     second.navigate()
 
-    expect(second.pushed).toEqual([{ channel: IPC.pointerRestore, payload: false }])
+    expect(second.pushed).toEqual([restore(false)])
+  })
+
+  it('pushes a changed accent into an open window rather than waiting for a navigation', () => {
+    // The sign-in window can be up while the accent is changed on the Settings
+    // screen behind it, and a keyboard still wearing the old one would be the
+    // one part of the launcher that did not follow. The preload cannot ask —
+    // it exposes nothing — so this channel is the only way the value arrives.
+    const target = fakeWindow(704)
+    registerPointerTarget(target.window, 'sign-in')
+
+    updatePointerSettings({ ...DEFAULT_SETTINGS, accentColor: 'mint', keyboardScale: '130' })
+
+    expect(target.pushed).toEqual([
+      {
+        channel: IPC.pointerRestore,
+        payload: { active: false, accent: 'oklch(0.86 0.13 165)', scale: 1.3 }
+      }
+    ])
   })
 
   it('ignores a stale "off" from a window that does not own the mode', () => {

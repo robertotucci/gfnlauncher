@@ -102,3 +102,62 @@ export function isScaleId(value: unknown): value is string {
 export function scaleValue(id: string | null | undefined): number {
   return (UI_SCALE_PRESETS.find((candidate) => candidate.id === id) ?? SCALE_100).value
 }
+
+/**
+ * How large the on-screen keyboard is drawn.
+ *
+ * A second size control rather than a reuse of `uiScale`, because it is not the
+ * same question. That one zooms the launcher's own renderer; the keyboard LB +
+ * RB raises is not the launcher — it is a sheet over somebody else's window,
+ * with one job, being typed on. Its right size follows from the pad and the
+ * distance rather than from how large the covers are, and the field being
+ * filled in is *behind* it, so a bigger keyboard covers more of the thing you
+ * are typing into. 150% on the grid and 90% here is a coherent pair of answers.
+ *
+ * The value is a **CSS multiplier**, written into `--kb-scale`, and deliberately
+ * not a zoom factor. `setZoomFactor` on the compose window would break the one
+ * CSS pixel = one DIP identity that `composeSafeBottom` depends on: that inset
+ * is measured in display pixels in main and consumed as CSS pixels in the page.
+ *
+ * Stored as an id, like the other two, for the same reason.
+ */
+export interface KeyboardScalePreset {
+  /** Stored in settings.json. Stable — renaming one resets that user's choice. */
+  id: string
+  label: string
+  /** Multiplier written into `--kb-scale` on the keyboard. */
+  value: number
+}
+
+const KEYBOARD_100: KeyboardScalePreset = { id: '100', label: '100%', value: 1 }
+
+/**
+ * A tighter range than `UI_SCALE_PRESETS`, bounded at both ends by something
+ * measurable rather than by taste. The panel is sized off one unit clamped
+ * against the viewport, so the top step is the largest that still leaves the
+ * six-row Italian layout inside a 1080p screen, and the bottom one is about the
+ * smallest key a thumbstick-driven cursor can be relied on to hit.
+ *
+ * **Only `'100'` is shared with `UI_SCALE_PRESETS`, and that is deliberate.**
+ * It means `isScaleId` and `isKeyboardScaleId` are not interchangeable, so a
+ * copy-paste of the wrong one into `sanitise()` fails the suite rather than
+ * shipping a setting that silently never saves.
+ */
+export const KEYBOARD_SCALE_PRESETS: readonly KeyboardScalePreset[] = [
+  { id: '80', label: '80%', value: 0.8 },
+  { id: '90', label: '90%', value: 0.9 },
+  KEYBOARD_100,
+  { id: '115', label: '115%', value: 1.15 },
+  { id: '130', label: '130%', value: 1.3 }
+]
+
+export const DEFAULT_KEYBOARD_SCALE = KEYBOARD_100.id
+
+export function isKeyboardScaleId(value: unknown): value is string {
+  return typeof value === 'string' && KEYBOARD_SCALE_PRESETS.some((preset) => preset.id === value)
+}
+
+/** The multiplier for a stored id, falling back to 1 for anything unknown. */
+export function keyboardScaleValue(id: string | null | undefined): number {
+  return (KEYBOARD_SCALE_PRESETS.find((candidate) => candidate.id === id) ?? KEYBOARD_100).value
+}

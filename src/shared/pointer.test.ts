@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   CHORD_BUTTONS,
-  CHORD_BUTTONS_JOYDEV,
   CHORD_HOLD_MS,
   CHORD_START,
+  COMPOSE_ACTIONS,
   KEYBOARD_CHORD_BUTTONS,
   KEYBOARD_CHORD_HOLD_MS,
   MAX_SAMPLE_GAP_MS,
   POINTER_ACTIONS,
-  POINTER_ACTIONS_JOYDEV,
   POINTER_DEADZONE,
   POINTER_MAX_SPEED,
   POINTER_MIN_SPEED,
@@ -127,14 +126,13 @@ describe('chordHeld', () => {
     expect(chordHeld([0, 3, 10, 11], CHORD_BUTTONS)).toBe(true)
   })
 
-  it('reads a different pair on joydev, which numbers the pad differently', () => {
-    // The W3C pair on joydev is L3 + Guide, which is the Steam overlay button.
-    expect(chordHeld([10, 11], CHORD_BUTTONS_JOYDEV)).toBe(false)
-    expect(chordHeld([9, 10], CHORD_BUTTONS_JOYDEV)).toBe(true)
-  })
-
-  it('keeps the two mappings distinct', () => {
-    expect(CHORD_BUTTONS).not.toEqual(CHORD_BUTTONS_JOYDEV)
+  it('is the W3C pair, and says so — the pad side is derived per device', () => {
+    // These numbers are only true of `navigator.getGamepads()`. The joydev
+    // index of the same two buttons depends on what the device declared, and
+    // `joydevLayout` in main/pointer/evdev.ts is what works it out; a second
+    // fixed table here is the bug that cost pointer mode its chord over
+    // Bluetooth.
+    expect(CHORD_BUTTONS).toEqual([10, 11])
   })
 })
 
@@ -300,9 +298,13 @@ describe('heldActions', () => {
   })
 
   it('ignores buttons with no pointer meaning, including both chords', () => {
-    // 2 is X, which used to open the keyboard and no longer does; 4 and 5 are
-    // the shoulder pair and 10/11 the stick pair, and a chord must not also
-    // fire as two separate actions.
+    // 2 and 3 are X and Y. They *are* bound — to SPACE and SEND — but in
+    // `COMPOSE_ACTIONS`, and only while a keyboard is in front. With a bare
+    // cursor on screen the face buttons read as mouse buttons, and a third one
+    // doing something else is a button nobody finds; that is why there are two
+    // maps rather than one, and this is the assertion that keeps them apart.
+    // 4 and 5 are the shoulder pair and 10/11 the stick pair: a chord must not
+    // also fire as two separate actions.
     expect(heldActions([2, 3, 4, 5, 10, 11, 12])).toEqual([])
   })
 
@@ -310,24 +312,57 @@ describe('heldActions', () => {
     expect(heldActions([0, 0])).toEqual(['leftClick'])
   })
 
-  it('puts ☰ somewhere else on joydev', () => {
-    expect(heldActions([9], POINTER_ACTIONS_JOYDEV)).toEqual([])
-    expect(heldActions([7], POINTER_ACTIONS_JOYDEV)).toEqual(['exit'])
+  it('puts ☰ on 9, which is where the W3C mapping has it', () => {
     expect(POINTER_ACTIONS[9]).toBe('exit')
+    expect(heldActions([9])).toEqual(['exit'])
   })
 
-  it('leaves the shoulders alone on both numberings', () => {
+  it('leaves the shoulders alone, so the keyboard chord is not also a click', () => {
     for (const index of KEYBOARD_CHORD_BUTTONS) {
       expect(POINTER_ACTIONS[index]).toBeUndefined()
-      expect(POINTER_ACTIONS_JOYDEV[index]).toBeUndefined()
     }
   })
 })
 
+describe('COMPOSE_ACTIONS', () => {
+  it('puts space on X and send on Y', () => {
+    // Printed on the keycaps, so these two numbers are a promise the user can
+    // read off the screen. X and Y in the W3C layout are 2 and 3.
+    expect(COMPOSE_ACTIONS[2]).toBe('space')
+    expect(COMPOSE_ACTIONS[3]).toBe('send')
+  })
+
+  it('shares no button with POINTER_ACTIONS', () => {
+    // Both maps are folded from the same reading on the same frame. An overlap
+    // would make one press mean two things — a click *and* a space — and the
+    // one that fired second would look like a phantom.
+    for (const index of Object.keys(COMPOSE_ACTIONS)) {
+      expect(POINTER_ACTIONS[Number(index)], index).toBeUndefined()
+    }
+  })
+
+  it('claims neither chord', () => {
+    for (const index of [...CHORD_BUTTONS, ...KEYBOARD_CHORD_BUTTONS]) {
+      expect(COMPOSE_ACTIONS[index]).toBeUndefined()
+    }
+  })
+
+  it('folds through heldActions like the pointer map does', () => {
+    expect(heldActions([2], COMPOSE_ACTIONS)).toEqual(['space'])
+    expect(heldActions([3], COMPOSE_ACTIONS)).toEqual(['send'])
+    expect(heldActions([2, 3], COMPOSE_ACTIONS)).toEqual(['space', 'send'])
+    expect(heldActions([0, 1, 9], COMPOSE_ACTIONS)).toEqual([])
+  })
+
+  it('edges the same way, so holding X does not fill the field with spaces', () => {
+    expect(stepPointerButtons([], ['space'])).toEqual({ down: ['space'], up: [] })
+    expect(stepPointerButtons(['space'], ['space'])).toEqual({ down: [], up: [] })
+    expect(stepPointerButtons(['space'], [])).toEqual({ down: [], up: ['space'] })
+  })
+})
+
 describe('the keyboard chord', () => {
-  it('is the same two buttons on both interfaces, unlike the stick pair', () => {
-    // LB and RB are 4 and 5 in the W3C mapping and 4 and 5 on joydev. The stick
-    // clicks are not, which is why they need two constants and this needs one.
+  it('is the shoulder pair in the W3C mapping', () => {
     expect(KEYBOARD_CHORD_BUTTONS).toEqual([4, 5])
     expect(chordHeld([4, 5], KEYBOARD_CHORD_BUTTONS)).toBe(true)
     expect(chordHeld([4], KEYBOARD_CHORD_BUTTONS)).toBe(false)
@@ -336,7 +371,6 @@ describe('the keyboard chord', () => {
   it('does not collide with the pair that opens pointer mode', () => {
     expect(chordHeld(CHORD_BUTTONS, KEYBOARD_CHORD_BUTTONS)).toBe(false)
     expect(chordHeld(KEYBOARD_CHORD_BUTTONS, CHORD_BUTTONS)).toBe(false)
-    expect(chordHeld(KEYBOARD_CHORD_BUTTONS, CHORD_BUTTONS_JOYDEV)).toBe(false)
   })
 
   it('fires on the press rather than on a hold', () => {

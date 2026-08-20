@@ -120,6 +120,13 @@ export const IPC = {
    * Main remembers the mode per window and replays it into each new document.
    * It is also how main can *end* the mode, which is the half that matters when
    * something goes wrong.
+   *
+   * The payload is `PointerRestore`, and it carries the accent and the keyboard
+   * size along with the mode. That preload cannot read settings — it exposes
+   * nothing and invokes nothing — and this is its only inbound channel, so a
+   * second one for two values would be a second thing to keep in step. Main
+   * re-sends it whenever those settings change, which is what makes a keyboard
+   * already on screen follow the accent rather than wait for a navigation.
    */
   pointerRestore: 'pointer:restore',
   /**
@@ -139,6 +146,30 @@ export const IPC = {
    * exactly as it is.
    */
   pointerMode: 'pointer:mode',
+  /**
+   * The composed keyboard, both ways.
+   *
+   * `composeView` is main pushing what to draw — the text so far, which layer
+   * is up, which key the pad is on — into the window that draws it. That window
+   * holds no state of its own on purpose: main reads the pad from joydev, so
+   * main is the only place that knows what the selection is.
+   *
+   * It also carries four things the *stylesheet* cannot know and the page has
+   * no way to ask for: the user's accent, the size they chose for the keyboard,
+   * how many rows this layout draws, and how much of the bottom of the window
+   * the compositor left unusable. The payload is one type, `ComposeView` in
+   * `@shared/keyboardLayout`, imported by main, the preload and the page — it
+   * was three hand-kept copies once, and the one that sent it was not even a
+   * type.
+   *
+   * `composePress` is the way back, and it exists for one thing: with a cursor
+   * already on screen, the keys are also *clickable*, and a keyboard you can
+   * see and cannot click reads as broken. It carries a button name, checked on
+   * the main side against the layout and against the sender, like everything
+   * else on this boundary.
+   */
+  composeView: 'compose:view',
+  composePress: 'compose:press',
   /**
    * Where the log file is, and what this build is.
    *

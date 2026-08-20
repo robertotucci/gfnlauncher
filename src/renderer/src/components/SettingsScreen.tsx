@@ -5,7 +5,9 @@ import {
   ACCENT_PRESETS,
   accentPreset,
   DEFAULT_ACCENT,
+  DEFAULT_KEYBOARD_SCALE,
   DEFAULT_UI_SCALE,
+  KEYBOARD_SCALE_PRESETS,
   UI_SCALE_PRESETS
 } from '@shared/theme'
 import { useFocusable } from '@/focus/SpatialFocus'
@@ -246,6 +248,48 @@ function ScaleRow({ scope, value, onSelect }: {
             key={preset.id}
             scope={scope}
             focusId={`setting:scale:${preset.id}`}
+            label={preset.label}
+            selected={preset.id === value}
+            onSelect={() => onSelect(preset.id)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * How large the on-screen keyboard is drawn.
+ *
+ * The one row on this screen that is **not** its own preview, and the copy has
+ * to carry that: the keyboard it sizes only exists while the launcher is not on
+ * screen. So the description names where it appears rather than what it does,
+ * and says out loud which keyboard it is not — there are three in this product
+ * and "Keyboard size" would fairly be read as governing all of them.
+ *
+ * Its own focus id prefix. Ids are global across scopes, and `setting:scale:`
+ * belongs to the row above.
+ */
+function KeyboardScaleRow({ scope, value, onSelect }: {
+  scope: string
+  value: string
+  onSelect: (id: string) => void
+}): ReactNode {
+  return (
+    <div className="px-4 py-3.5">
+      <p className="text-sm font-medium">Keyboard size</p>
+      <p className="text-muted-foreground mt-1 text-xs">
+        The keyboard LB&nbsp;+&nbsp;RB opens over the desktop, a sign-in page or a running game.
+        Larger keys are easier to reach with the cursor and cover more of the window you are typing
+        into. It does not change the keyboard in the launcher&rsquo;s own search.
+      </p>
+
+      <div className="mt-3 flex items-center gap-2">
+        {KEYBOARD_SCALE_PRESETS.map((preset) => (
+          <ChoiceChip
+            key={preset.id}
+            scope={scope}
+            focusId={`setting:keyboardScale:${preset.id}`}
             label={preset.label}
             selected={preset.id === value}
             onSelect={() => onSelect(preset.id)}
@@ -560,6 +604,12 @@ export function SettingsScreen({
             scope={scope}
             value={settings.uiScale ?? DEFAULT_UI_SCALE}
             onSelect={(uiScale) => onUpdate({ uiScale })}
+          />
+          <Separator className="my-1" />
+          <KeyboardScaleRow
+            scope={scope}
+            value={settings.keyboardScale ?? DEFAULT_KEYBOARD_SCALE}
+            onSelect={(keyboardScale) => onUpdate({ keyboardScale })}
           />
         </Section>
 

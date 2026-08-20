@@ -81,6 +81,26 @@ export const OSK_ROWS: readonly (readonly OskKey[])[] = [
   ]
 ]
 
+/**
+ * The pad button that reaches a key without walking to it, printed on the key.
+ *
+ * Only the four keys that have one — every other key is "move the selection,
+ * press A", and stamping that on fifty-six keycaps would say nothing while
+ * making the legends unreadable.
+ *
+ * `{close}` carries the chord rather than a button, and that is the honest
+ * label: ☰ here does not close the keyboard, it ends pointer mode outright and
+ * takes the cursor with it. The twin of `COMPOSE_SHORTCUTS` in
+ * `@shared/keyboardLayout`, which differs on exactly that key and for exactly
+ * that reason.
+ */
+export const OSK_SHORTCUTS: Readonly<Partial<Record<OskKind, string>>> = {
+  space: 'X',
+  enter: 'Y',
+  backspace: 'B',
+  close: 'LB+RB'
+}
+
 /** Where the cursor sits when the keyboard opens: the first letter. */
 export const OSK_START: OskCursor = { row: 0, col: 0 }
 

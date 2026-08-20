@@ -50,14 +50,17 @@ export type Direction = 'up' | 'down' | 'left' | 'right'
 export const CHORD_BUTTONS: readonly number[] = [10, 11]
 
 /**
- * The same pair as joydev numbers them, which is **not** the same pair.
+ * **The pad side of this lives elsewhere, and it is not a constant.**
  *
- * `/dev/input/js*` predates the W3C mapping and counts differently: Back is 6,
- * Start is 7, Guide is 8, and the stick clicks land on 9 and 10. Reading the
- * W3C indices off joydev would give L3 + Guide, which on most pads is the
- * button that opens the Steam overlay.
+ * Everything in this file numbers buttons the way the *browser* does, because
+ * that is a fixed table: the W3C standard mapping says L3 is 10 whatever is in
+ * your hands. `/dev/input/js*`, which main reads, has no such table — joydev
+ * numbers the buttons a device *declares*, in the order the kernel finds them,
+ * so the same Xbox pad is 9 and 10 over USB and 13 and 14 over Bluetooth. The
+ * codes and the per-device mapping are in `src/main/pointer/evdev.ts`
+ * (`CHORD_BUTTONS_EVDEV`, `joydevLayout`); do not add a second fixed table
+ * here, because that is the bug those exist to have fixed.
  */
-export const CHORD_BUTTONS_JOYDEV: readonly number[] = [9, 10]
 
 /**
  * How long both have to be down before the mode flips.
@@ -75,10 +78,11 @@ export const CHORD_HOLD_MS = 600
 /**
  * The shoulder pair, which raises and lowers the on-screen keyboard.
  *
- * **The same two numbers on both interfaces**, unlike the stick clicks: LB and
- * RB are 4 and 5 in the W3C mapping and 4 and 5 on joydev. One constant, and
- * the coincidence is asserted in the suite so a future reader does not "fix" it
- * into a second table.
+ * W3C numbering, like everything else here. It used to be documented as "the
+ * same two numbers on both interfaces" — LB and RB really are 4 and 5 on a USB
+ * Xbox pad's joydev node — and that coincidence was never a rule: the same pad
+ * over Bluetooth puts them on 6 and 7. The kernel side is
+ * `KEYBOARD_CHORD_BUTTONS_EVDEV` in `src/main/pointer/evdev.ts`.
  *
  * A pair rather than a single button because inside pointer mode the face
  * buttons are already a mouse — A and B are the two clicks — and the shoulders
@@ -322,11 +326,33 @@ export const POINTER_ACTIONS: Readonly<Record<number, PointerActionName>> = {
   9: 'exit'
 }
 
-/** The same map for joydev's numbering. Faces agree; only ☰ moves. */
-export const POINTER_ACTIONS_JOYDEV: Readonly<Record<number, PointerActionName>> = {
-  0: 'leftClick',
-  1: 'rightClick',
-  7: 'exit'
+/**
+ * The pad-side map is `POINTER_ACTIONS_EVDEV`, and it is keyed by kernel code
+ * rather than by index for the reason `CHORD_BUTTONS` gives above.
+ */
+
+export type ComposeActionName = 'space' | 'send'
+
+/**
+ * The two shortcuts the on-screen keyboard prints on its own keycaps.
+ *
+ * A separate map from `POINTER_ACTIONS`, and that is the whole point: that one
+ * is read whenever the cursor is up, and X and Y must stay **inert** there —
+ * with a cursor on screen the face buttons read as mouse buttons, and the
+ * launcher already learned once that a third one meaning something else is a
+ * button nobody finds. These are only consulted while a keyboard is in front,
+ * where nothing else is listening to them.
+ *
+ * Space and Send and not, say, Shift, because they are the two keys a person
+ * reaches for most while typing an address into somebody else's login form, and
+ * because the shoulders — the obvious home for a third — are the chord that
+ * closes the keyboard.
+ *
+ * `pointer.test.ts` pins that `POINTER_ACTIONS` does not contain 2 or 3.
+ */
+export const COMPOSE_ACTIONS: Readonly<Record<number, ComposeActionName>> = {
+  2: 'space',
+  3: 'send'
 }
 
 /**
@@ -335,23 +361,38 @@ export const POINTER_ACTIONS_JOYDEV: Readonly<Record<number, PointerActionName>>
  * Edges rather than levels, because a click is `mouseDown` then `mouseUp` and a
  * drag is the gap between them — holding A across ten frames must not send ten
  * presses, and letting go must send exactly one release.
+ *
+ * Generic over the action name so the keyboard's own map can use it too: the
+ * arithmetic is the same and there is no reason for a second copy of it.
  */
-export function stepPointerButtons(
-  previous: readonly PointerActionName[],
-  current: readonly PointerActionName[]
-): { readonly down: PointerActionName[]; readonly up: PointerActionName[] } {
+export function stepPointerButtons<T extends string>(
+  previous: readonly T[],
+  current: readonly T[]
+): { readonly down: T[]; readonly up: T[] } {
   return {
     down: current.filter((action) => !previous.includes(action)),
     up: previous.filter((action) => !current.includes(action))
   }
 }
 
-/** Reads the actions a pad is holding, given a button map. */
+/**
+ * Reads the actions a pad is holding, given a button map.
+ *
+ * Two signatures rather than a generic with a default, because a default type
+ * parameter and a default *value* cannot be made to agree without a cast, and a
+ * cast here would be a cast on the one boundary where the button numbering is
+ * already the thing that goes wrong.
+ */
+export function heldActions(pressed: Iterable<number>): PointerActionName[]
+export function heldActions<T extends string>(
+  pressed: Iterable<number>,
+  actions: Readonly<Record<number, T>>
+): T[]
 export function heldActions(
   pressed: Iterable<number>,
-  actions: Readonly<Record<number, PointerActionName>> = POINTER_ACTIONS
-): PointerActionName[] {
-  const held: PointerActionName[] = []
+  actions: Readonly<Record<number, string>> = POINTER_ACTIONS
+): string[] {
+  const held: string[] = []
   for (const index of pressed) {
     const action = actions[index]
     if (action && !held.includes(action)) held.push(action)
@@ -382,6 +423,23 @@ export type PointerCommand =
   | { readonly kind: 'wheel'; readonly x: number; readonly y: number; readonly deltaY: number }
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'key'; readonly key: PointerKeyName }
+
+/**
+ * What main replays into each new document, main → preload.
+ *
+ * It carries the mode because signing in is three or four navigations and the
+ * preload is re-executed from nothing at every one of them. It carries the look
+ * because the preload cannot read settings: it exposes nothing, it is re-sent on
+ * every settings change, and the alternative — a second channel — would be a
+ * second thing to keep in step for one string and one number.
+ */
+export interface PointerRestore {
+  readonly active: boolean
+  /** A CSS colour from `accentValue`. The keyboard's selected key wears it. */
+  readonly accent: string
+  /** A multiplier from `keyboardScaleValue`, applied to the keyboard's unit. */
+  readonly scale: number
+}
 
 /**
  * The named keys the on-screen keyboard can send.

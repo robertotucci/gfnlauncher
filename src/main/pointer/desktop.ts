@@ -1,9 +1,6 @@
 import {
-  CHORD_BUTTONS_JOYDEV,
   CHORD_START,
-  KEYBOARD_CHORD_BUTTONS,
   KEYBOARD_CHORD_HOLD_MS,
-  POINTER_ACTIONS_JOYDEV,
   chordHeld,
   heldActions,
   pointerSpeed,
@@ -11,10 +8,22 @@ import {
   stepChord,
   stepPointerButtons,
   type ChordState,
+  type ComposeActionName,
   type PointerActionName
 } from '@shared/pointer'
-import { JOYDEV_AXES, openPadReader, type PadReader, type PadSample } from './evdev'
+import {
+  CHORD_BUTTONS_EVDEV,
+  COMPOSE_ACTIONS_EVDEV,
+  KEYBOARD_CHORD_BUTTONS_EVDEV,
+  PAD_READING_EMPTY,
+  POINTER_ACTIONS_EVDEV,
+  openPadReader,
+  type PadReader,
+  type PadReading
+} from './evdev'
+import { composeDirection, openComposer, type Composer, type ComposeLook } from './compose'
 import { openRemotePointer, type RemotePointer } from './portal'
+import { readSystemLayout, toggleSystemKeyboard } from './systemKeyboard'
 
 /**
  * Pointer mode everywhere that is not one of our own windows.
@@ -78,6 +87,14 @@ export interface DesktopPointerDeps {
    * top of it would fight it.
    */
   readonly ownWindowActive: () => boolean
+  /**
+   * The accent and the keyboard size, read at each open like `enabled()`.
+   *
+   * A thunk rather than a value for the same reason: this is armed once at
+   * start and the settings change under it, and a snapshot captured at arm time
+   * would leave the keyboard wearing whatever accent was set at boot.
+   */
+  readonly composeLook: () => ComposeLook
   /** Told to the renderer, so the stick stops driving the grid as well. */
   readonly onMode: (active: boolean) => void
 }
@@ -108,14 +125,30 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
   /** The shoulder pair, kept apart from the stick one so neither disarms the other. */
   let keyboardChord: ChordState = CHORD_START
   let held: readonly PointerActionName[] = []
+  /**
+   * X and Y, tracked separately and *every* frame rather than only while the
+   * keyboard is up.
+   *
+   * Kept apart from `held` because the two maps answer different questions and
+   * must not disarm each other; kept running while the keyboard is closed
+   * because that is the adoption rule — a thumb already on X as the window
+   * opens produces no down edge, and so no space nobody asked for.
+   */
+  let heldCompose: readonly ComposeActionName[] = []
   let scrollCarry = 0
   let ticker: NodeJS.Timeout | null = null
   let lastTick = 0
   let disposed = false
   /** Said once per session, not once per press. */
   let saidNoKeyboard = false
+  /** Whether the compositor's keyboard is up because *we* asked for it. */
+  let keyboardShown = false
+  /** One request at a time: a D-Bus round trip is slower than the shoulders. */
+  let keyboardPending = false
+  /** Our own keyboard, open only when the compositor refused to show its one. */
+  let composer: Composer | null = null
 
-  const sample = (): PadSample => reader?.sample() ?? { buttons: new Set(), axes: [] }
+  const sample = (): PadReading => reader?.sample() ?? PAD_READING_EMPTY
 
   /**
    * Whether anything still needs a clock.
@@ -126,7 +159,7 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
    * would move the cursor once and stop.
    */
   const needsTicking = (): boolean =>
-    remote !== null || chordHeld(sample().buttons, CHORD_BUTTONS_JOYDEV)
+    remote !== null || chordHeld(sample().buttons, CHORD_BUTTONS_EVDEV)
 
   const ensureTicking = (): void => {
     if (ticker !== null || disposed || !needsTicking()) return
@@ -164,10 +197,23 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
           pointer.close()
           return
         }
+        // The other half of the race `pointer/index.ts` settles: a window of
+        // ours can take the pointer during the few hundred milliseconds the
+        // portal spends opening, and `stop()` cannot undo a session that did
+        // not exist yet when it ran. Asked again here, where the answer is
+        // finally about the same instant the session becomes usable.
+        if (deps.ownWindowActive()) {
+          pointer.close()
+          console.info(
+            'Desktop pointer dropped as it opened: a window of ours has the cursor instead'
+          )
+          return
+        }
         remote = pointer
         // Adopt whatever is held right now, so the buttons that were down
         // during the chord are not read as a click the instant it opens.
-        held = heldActions(sample().buttons, POINTER_ACTIONS_JOYDEV)
+        held = heldActions(sample().buttons, POINTER_ACTIONS_EVDEV)
+        heldCompose = heldActions(sample().buttons, COMPOSE_ACTIONS_EVDEV)
         // Unarmed, so the adoption rule applies again: a shoulder already down
         // as the cursor appears must not count as asking for the keyboard.
         keyboardChord = CHORD_START
@@ -199,6 +245,15 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       if (action === 'rightClick') remote.button('right', false)
     }
     held = []
+    heldCompose = []
+
+    // Before the session goes: both keyboards were raised as part of this mode.
+    // KWin's would sit over somebody's screen for the rest of the session, and
+    // ours would be a window with a dead pad in it — the loop that drives it is
+    // the one ending here.
+    hideKeyboard()
+    composer?.dispose()
+    composer = null
 
     remote.close()
     remote = null
@@ -224,27 +279,149 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
   }
 
   /**
-   * LB + RB asks for the keyboard, and out here there is not one.
+   * LB + RB asks for a keyboard, and out here there are two answers.
    *
-   * Deliberately absent rather than half-built, and measured rather than
-   * assumed: an Electron window created with `focusable: false`,
-   * `alwaysOnTop` and `showInactive()` was tried on this compositor and the
-   * focused window lost its focus anyway. The focus is precisely what decides
-   * where `NotifyKeyboardKeysym` lands, so a keyboard drawn that way types into
-   * itself. It therefore lives only in the windows we own — which is also where
-   * the typing actually has to happen, the sign-in form.
+   * **The compositor's, if it will.** Ours is drawn by a preload into a page we
+   * own and cannot follow the cursor out here: an Electron window created the
+   * only way an overlay could be — `focusable: false`, `alwaysOnTop`,
+   * `showInactive()` — takes the focus, and the focus is what decides where a
+   * keystroke lands. KWin's keyboard is a layer-shell surface and has no such
+   * problem, so it is asked first and the pad types on it with the cursor it
+   * already has.
    *
-   * Said once per session rather than per press: this runs off a pad, and the
-   * log is a file somebody has to be able to skim.
+   * **Ours, composed, if it will not.** KWin declines more often than not: it
+   * raises its keyboard for touch, so `willShowOnActive` is false on any machine
+   * without a touchscreen however loudly `forceActivate` is called. Then the
+   * launcher stops trying to draw and type at the same time — `compose.ts` takes
+   * the focus deliberately, collects the whole string, gets out of the way and
+   * only then sends it. Same chord, same keyboard layout, one fewer promise.
+   *
+   * Fire and forget, because this is called from inside a 60 Hz tick and nothing
+   * there may await. `toggleSystemKeyboard` never rejects.
    */
-  const askedForKeyboard = (): void => {
-    if (saidNoKeyboard) return
-    saidNoKeyboard = true
-    console.info(
-      'LB + RB asked for the on-screen keyboard, which exists only inside the ' +
-        'launcher’s own windows — the sign-in page and the web player. Out here ' +
-        'the pad drives the cursor only.'
-    )
+  const askForKeyboard = (): void => {
+    if (keyboardPending) return
+
+    // Already composing: the chord that opened it closes it, which is what it
+    // does in every other layer of this mode.
+    if (composer) {
+      composer.cancel()
+      return
+    }
+
+    keyboardPending = true
+
+    void toggleSystemKeyboard().then((result) => {
+      if (result.kind !== 'unavailable') {
+        keyboardPending = false
+        keyboardShown = result.kind === 'shown'
+        console.info(`On-screen keyboard ${keyboardShown ? 'shown' : 'hidden'} by KWin`)
+        return
+      }
+
+      keyboardShown = false
+      // Once per session: the same sentence every press, and the log is a file
+      // somebody has to be able to skim. Said at all because the fallback is
+      // not the thing that was asked for and the difference is worth recording.
+      if (!saidNoKeyboard) {
+        saidNoKeyboard = true
+        console.info(`KWin will not show its keyboard, composing instead. ${result.reason}`)
+      }
+
+      // The layout first, because it decides what the keyboard *is*. One D-Bus
+      // round trip, and a failure resolves to null rather than throwing, so the
+      // keyboard opens either way.
+      //
+      // `keyboardPending` deliberately stays set across *this* round trip too,
+      // and it used to be cleared above. There are two awaits between the chord
+      // and the window, and clearing after the first one left a gap in which a
+      // second chord opened a second keyboard — losing the first one's window
+      // handle, and with it any way to close it.
+      void readSystemLayout().then(openCompose)
+    })
+  }
+
+  /**
+   * The fallback, and the only one that works with no help from the desktop.
+   *
+   * While it is up the pad belongs to it: the cursor stops moving, the wheel
+   * stops scrolling, and A, B, X, Y and ☰ mean press, backspace, space, send
+   * and cancel. That is not a mode within a mode for its own sake — a cursor
+   * drifting behind a keyboard the user is reading is how a text field loses its
+   * focus, and with it everything typed so far.
+   */
+  const openCompose = (layoutId: string | null): void => {
+    // Cleared here rather than after the first round trip, and *before* the
+    // guard below, so a mode that ended mid-flight releases the chord instead of
+    // wedging it for the rest of the session.
+    keyboardPending = false
+
+    // Re-checked after the round trip that fetched the layout: a chord released
+    // and pressed again, or ☰, could have ended the mode in the meantime.
+    if (composer || !remote) return
+
+    composer = openComposer({
+      layoutId,
+      look: deps.composeLook(),
+      onFinished: (result) => {
+        composer = null
+
+        if (!result) {
+          console.info('Composed text cancelled')
+          return
+        }
+        if (!remote) {
+          // The mode ended while the window was up — quitting, or ☰ from
+          // another path. Typing into whatever is in front now would be input
+          // nobody asked for.
+          console.info('Composed text dropped: the pointer session had already ended')
+          return
+        }
+
+        // Length only. This is a password field as often as not, and the log is
+        // the file the README asks people to attach to a public issue.
+        console.info(`Typing ${result.text.length} composed characters into the focused window`)
+        for (const char of result.text) remote.typeChar(char)
+        if (result.enter) remote.pressKey('Enter')
+      }
+    })
+  }
+
+  /**
+   * Takes the compositor's keyboard away with the cursor that summoned it.
+   *
+   * Nothing else would: it is KWin's window, so it outlives our mode and would
+   * sit over whatever is on screen for the rest of the session. Only sent when
+   * we know we put it there, so this can never close a keyboard the user raised
+   * some other way.
+   */
+  const hideKeyboard = (): void => {
+    if (!keyboardShown) return
+    keyboardShown = false
+    void toggleSystemKeyboard().then((result) => {
+      if (result.kind === 'unavailable') {
+        console.info(`Could not put the on-screen keyboard away: ${result.reason}`)
+      }
+    })
+  }
+
+  /**
+   * One sample of the chord, and it **acts on the toggle**.
+   *
+   * The whole of it is here rather than inline in `tick` because two things
+   * sample it — the tick, and every joydev event that arrives between two ticks
+   * — and the second one used to keep the `next` state and drop the `toggle`.
+   * That is a silent swallow: the state it kept says `fired`, so the tick that
+   * followed would not fire either, and a hold that crossed 600 ms a
+   * millisecond before an axis event did nothing at all. With a thumb resting
+   * on a stick that is most of them.
+   */
+  const stepTheChord = (current: PadReading, now: number): void => {
+    const step = stepChord(chord, chordHeld(current.buttons, CHORD_BUTTONS_EVDEV), now)
+    chord = step.next
+    if (!step.toggle) return
+    if (remote) stop('L3 + R3')
+    else start()
   }
 
   const tick = (): void => {
@@ -253,44 +430,60 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
     lastTick = now
 
     const current = sample()
-
-    const step = stepChord(chord, chordHeld(current.buttons, CHORD_BUTTONS_JOYDEV), now)
-    chord = step.next
-    if (step.toggle) {
-      if (remote) stop('L3 + R3')
-      else start()
-    }
+    stepTheChord(current, now)
 
     if (remote) {
-      const actions = heldActions(current.buttons, POINTER_ACTIONS_JOYDEV)
+      const actions = heldActions(current.buttons, POINTER_ACTIONS_EVDEV)
       const edges = stepPointerButtons(held, actions)
       held = actions
-      for (const action of edges.up) onAction(action, false)
-      for (const action of edges.down) onAction(action, true)
 
-      // Same shoulder pair as in our own windows — LB and RB are 4 and 5 on
-      // joydev too — so the answer is at least consistent, even though out here
-      // the answer is "there is no keyboard".
+      // Folded every frame, acted on only while the keyboard is up — see
+      // `heldCompose`. Outside it X and Y are unmapped and stay that way: with a
+      // bare cursor on screen the face buttons are a mouse.
+      const composeActions = heldActions(current.buttons, COMPOSE_ACTIONS_EVDEV)
+      const composeEdges = stepPointerButtons(heldCompose, composeActions)
+      heldCompose = composeActions
+
+      // The same shoulder pair as in our own windows, so the chord means one
+      // thing everywhere even though what answers it differs.
       const keyboardStep = stepChord(
         keyboardChord,
-        chordHeld(current.buttons, KEYBOARD_CHORD_BUTTONS),
+        chordHeld(current.buttons, KEYBOARD_CHORD_BUTTONS_EVDEV),
         now,
         KEYBOARD_CHORD_HOLD_MS
       )
       keyboardChord = keyboardStep.next
-      if (keyboardStep.toggle) askedForKeyboard()
+      if (keyboardStep.toggle) askForKeyboard()
 
-      moveCursor(current, dt)
-      scrollWheel(current, dt)
+      if (composer) {
+        // The pad belongs to the keyboard while it is up. Presses on the *down*
+        // edge only, as everywhere else, so holding A does not fill the field.
+        for (const action of edges.down) {
+          if (action === 'leftClick') composer.press()
+          if (action === 'rightClick') composer.backspace()
+          if (action === 'exit') composer.cancel()
+        }
+        // The two keys the keycaps advertise. Same edge rule, same reason.
+        for (const action of composeEdges.down) {
+          if (action === 'space') composer.space()
+          if (action === 'send') composer.send()
+        }
+        composer.step(composeDirection(current.axes), now)
+      } else {
+        for (const action of edges.up) onAction(action, false)
+        for (const action of edges.down) onAction(action, true)
+
+        moveCursor(current, dt)
+        scrollWheel(current, dt)
+      }
     }
 
     if (!needsTicking()) stopTicking()
   }
 
-  const moveCursor = (current: PadSample, dt: number): void => {
+  const moveCursor = (current: PadReading, dt: number): void => {
     if (!remote) return
-    const x = current.axes[JOYDEV_AXES.leftX] ?? 0
-    const y = current.axes[JOYDEV_AXES.leftY] ?? 0
+    const { leftX: x, leftY: y } = current.axes
     const magnitude = Math.hypot(x, y)
     const speed = pointerSpeed(magnitude)
     if (speed === 0) return
@@ -302,9 +495,9 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
     remote.moveBy(x * step, y * step)
   }
 
-  const scrollWheel = (current: PadSample, dt: number): void => {
+  const scrollWheel = (current: PadReading, dt: number): void => {
     if (!remote) return
-    scrollCarry += scrollDelta(current.axes[JOYDEV_AXES.rightY] ?? 0, dt)
+    scrollCarry += scrollDelta(current.axes.rightY, dt)
 
     const notches = Math.trunc(scrollCarry / PIXELS_PER_NOTCH)
     if (notches === 0) return
@@ -337,15 +530,26 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       if (disposed) return
       ensureTicking()
       // Sampled straight away too, so a chord *released* is noticed at once
-      // rather than at the next tick — the timer may already have stopped.
-      if (!remote) {
-        chord = stepChord(chord, chordHeld(sample().buttons, CHORD_BUTTONS_JOYDEV), Date.now()).next
-      }
+      // rather than at the next tick — the timer may already have stopped. It
+      // goes through the same call the tick does, toggle included: half a step
+      // here is what used to eat the toggle when an axis event landed on the
+      // same millisecond the hold came due.
+      if (!remote) stepTheChord(sample(), Date.now())
     })
 
-    const pads = reader.sample()
+    // How many devices were opened, not what they are reporting: joydev sends
+    // its state dump asynchronously, so a pad that is plugged in has an empty
+    // reading for another millisecond yet and "waiting for a pad" would be a
+    // lie on every start.
+    const pads = reader.connected()
     console.info(
-      `Desktop pointer armed: ${pads.axes.length > 0 ? 'a pad is already connected' : 'waiting for a pad'}`
+      `Desktop pointer armed: ${
+        pads === 0
+          ? 'waiting for a pad'
+          : pads === 1
+            ? 'a pad is already connected'
+            : `${pads} pads are already connected`
+      }`
     )
   }
 
@@ -358,6 +562,11 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
     dispose() {
       disposed = true
       stop('the launcher is quitting')
+      // `stop` takes it with the session, and this is for the case where there
+      // was no session to stop: a window of ours outliving `will-quit` is the
+      // one way this feature could keep the application from closing.
+      composer?.dispose()
+      composer = null
       stopTicking()
       reader?.close()
       reader = null

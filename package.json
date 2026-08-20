@@ -46,7 +46,8 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@homebridge/dbus-native": "^0.7.9",
-    "radix-ui": "^1.6.7"
+    "radix-ui": "^1.6.7",
+    "simple-keyboard": "^3.8.177"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

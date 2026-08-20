@@ -65,15 +65,17 @@ export default defineConfig({
       // Sandboxed preload scripts cannot be ES modules, and we want to keep
       // sandbox: true. Force CommonJS output regardless of package.json type.
       rollupOptions: {
-        // Two preloads, and they are opposites. `index` is the bridge the
-        // launcher's own UI talks through; `pointer` goes on the two windows
-        // that render somebody else's page and deliberately exposes *nothing* —
-        // see the header of src/preload/pointer.ts. Naming both here is what
-        // stops electron-vite falling back to its single-entry default and
-        // silently dropping the second one.
+        // Three preloads, and the middle one is the odd one out. `index` is the
+        // bridge the launcher's own UI talks through and `compose` is the same
+        // idea for the typing window — both pages are ours. `pointer` goes on
+        // the two windows that render somebody else's page and deliberately
+        // exposes *nothing*; see the header of src/preload/pointer.ts. Naming
+        // them all here is what stops electron-vite falling back to its
+        // single-entry default and silently dropping the rest.
         input: {
           index: resolve('src/preload/index.ts'),
-          pointer: resolve('src/preload/pointer.ts')
+          pointer: resolve('src/preload/pointer.ts'),
+          compose: resolve('src/preload/compose.ts')
         },
         output: {
           format: 'cjs',
@@ -96,7 +98,16 @@ export default defineConfig({
       // paint fast at session start should not parse unminified source.
       minify: 'esbuild',
       rollupOptions: {
-        input: resolve('src/renderer/index.html')
+        // Two pages. `index` is the launcher; `compose` is the keyboard that
+        // types into windows that are not ours — a page with no React, no
+        // Tailwind and no state, because main drives it over the bridge. It is
+        // a renderer entry rather than a third preload or a `data:` URL so that
+        // `simple-keyboard` is bundled *into the application* and needs nothing
+        // installed on the machine, which is the whole requirement.
+        input: {
+          index: resolve('src/renderer/index.html'),
+          compose: resolve('src/renderer/compose.html')
+        }
       }
     }
   }

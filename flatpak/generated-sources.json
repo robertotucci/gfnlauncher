@@ -4108,6 +4108,13 @@
     },
     {
         "type": "file",
+        "url": "https://registry.npmjs.org/simple-keyboard/-/simple-keyboard-3.8.177.tgz",
+        "sha512": "c715acb664e9e6e36b4b2839df67a940c0256d1bc569508cc01bfe6e74cb41ce71619de04c8e8163babfe664fe951d2561cef11fedf3c6196bc576b3730509f4",
+        "dest-filename": "acb664e9e6e36b4b2839df67a940c0256d1bc569508cc01bfe6e74cb41ce71619de04c8e8163babfe664fe951d2561cef11fedf3c6196bc576b3730509f4",
+        "dest": "flatpak-node/npm-cache/_cacache/content-v2/sha512/c7/15"
+    },
+    {
+        "type": "file",
         "url": "https://registry.npmjs.org/simple-update-notifier/-/simple-update-notifier-2.0.0.tgz",
         "sha512": "6b607d6342a535797dbbfbec5bab1322ef6f184a5f2aedb0455ea5d47dd711ab3fd20508cc6cc1a0ffc8a2e4dc5106e6f495992c7dc23b1ca7d374d89456b1eb",
         "dest-filename": "7d6342a535797dbbfbec5bab1322ef6f184a5f2aedb0455ea5d47dd711ab3fd20508cc6cc1a0ffc8a2e4dc5106e6f495992c7dc23b1ca7d374d89456b1eb",
@@ -6333,6 +6340,12 @@
         "contents": "78009203a4d6c0d136d30689531b9fd0616bade0\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/env-paths/-/env-paths-3.0.0.tgz\", \"integrity\": \"sha512-dtJUTepzMW3Lm/NPxRf3wP4642UWhjL2sQxc+ym2YMj1m/H2zDNQOlezafzkHwn6sMstjHTwG6iQQsctDW/b1A==\", \"time\": 0, \"size\": 3254, \"metadata\": {\"url\": \"https://registry.npmjs.org/env-paths/-/env-paths-3.0.0.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
         "dest-filename": "9594cf5ec7b6b73d63a930b49bf7075e8a5c29cdc43776e641af762a7710",
         "dest": "flatpak-node/npm-cache/_cacache/index-v5/b3/90"
+    },
+    {
+        "type": "inline",
+        "contents": "7825c3b9fec2f5a39a0ff202980792062d9b40d6\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/simple-keyboard/-/simple-keyboard-3.8.177.tgz\", \"integrity\": \"sha512-xxWstmTp5uNrSyg532epQMAlbRvFaVCMwBv+bnTLQc5xYZ3gTI6BY7q/5mT+lR0lYc7xH+3zxhlrxXazcwUJ9A==\", \"time\": 0, \"size\": 136971, \"metadata\": {\"url\": \"https://registry.npmjs.org/simple-keyboard/-/simple-keyboard-3.8.177.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
+        "dest-filename": "d8777cc6b72e9ec57074614082895ac7f8a6469d3aeb676bc89d0a4b2a44",
+        "dest": "flatpak-node/npm-cache/_cacache/index-v5/54/dd"
     },
     {
         "type": "inline",

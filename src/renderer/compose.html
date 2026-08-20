@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No `connect-src`, no `img-src`: this page loads nothing at all. Its script
+      and stylesheet are bundled beside it and its only input arrives over the
+      bridge in src/preload/compose.ts.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
+    />
+    <title>Type</title>
+  </head>
+  <body>
+    <!--
+      One opaque panel inside a transparent, screen-sized window: the window
+      cannot place itself on Wayland, so the stylesheet anchors this along the
+      bottom edge instead. See compose.css.
+    -->
+    <div class="panel">
+      <!--
+        One line for both, because this panel sits over the field being filled
+        in and every row of chrome is a row of the page it covers. The legend is
+        two entries: the other four are printed on the keycaps that do them, and
+        what is left is the pair that belongs to no single key — moving the
+        selection, and pressing whatever it is on.
+      -->
+      <div class="head">
+        <p class="caption">Type here, then SEND — it goes to the window behind this one.</p>
+        <p class="legend">
+          <span><b>Stick / D-pad</b>Move</span><span><b>A</b>Press key</span>
+        </p>
+      </div>
+      <div class="field"><span id="text"></span><span class="caret"></span></div>
+      <div class="simple-keyboard"></div>
+    </div>
+    <script type="module" src="/compose/main.ts"></script>
+  </body>
+</html>

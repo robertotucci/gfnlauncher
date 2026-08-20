@@ -2,6 +2,7 @@ import { ipcRenderer } from 'electron'
 import type { IPC as IpcChannels } from '@shared/ipc'
 import {
   CHORD_START,
+  COMPOSE_ACTIONS,
   KEYBOARD_CHORD_BUTTONS,
   KEYBOARD_CHORD_HOLD_MS,
   centreOf,
@@ -12,14 +13,17 @@ import {
   stepPointer,
   stepPointerButtons,
   type ChordState,
+  type ComposeActionName,
   type Direction,
   type PointerActionName,
   type PointerCommand,
+  type PointerRestore,
   type PointerState
 } from '@shared/pointer'
 import {
   OSK_NAV_START,
   OSK_ROWS,
+  OSK_SHORTCUTS,
   OSK_START,
   moveOskSelection,
   oskChar,
@@ -97,6 +101,15 @@ let chord = CHORD_START
 /** The shoulder pair. Its own state, so one chord cannot disarm the other. */
 let keyboardChord: ChordState = CHORD_START
 let held: readonly PointerActionName[] = []
+/**
+ * X and Y, tracked apart from `held` and folded on *every* frame.
+ *
+ * Apart, because the two maps answer different questions and must not disarm
+ * each other. Every frame, because that is the adoption rule: a thumb already
+ * on X as the keyboard opens produces no down edge, and so no space nobody
+ * asked for.
+ */
+let heldCompose: readonly ComposeActionName[] = []
 let lastSample = 0
 
 let keyboardOpen = false
@@ -124,22 +137,76 @@ function bounds(): { width: number; height: number } {
  * theirs outright.
  */
 let root: ShadowRoot | null = null
+/** Kept, because the accent and the size are set on it as custom properties. */
+let hostNode: HTMLElement | null = null
 let cursorNode: HTMLElement | null = null
 let hintNode: HTMLElement | null = null
 let keyboardNode: HTMLElement | null = null
 let keyNodes: Map<string, HTMLElement> = new Map()
 
+/**
+ * The user's accent and keyboard size, replayed from main on `pointer:restore`.
+ *
+ * Held here because the layer may not exist yet when the message lands — a
+ * preload runs before there is a document — so it is remembered and applied in
+ * `ensureUi`, and again on every message after that.
+ */
+let look: { accent: string; scale: number } | null = null
+
+function applyLook(): void {
+  if (!hostNode || !look) return
+  hostNode.style.setProperty('--accent', look.accent)
+  hostNode.style.setProperty('--kb-scale', String(look.scale))
+}
+
 const HOST_ID = 'gfn-launcher-pointer'
 
+/**
+ * The same language as the composed keyboard in `src/renderer/compose/`, and
+ * that is the point: they are two drawings of one object, and a user who meets
+ * both in one sign-in should not be able to tell they were written twice.
+ *
+ * Flat surfaces, one unit, and a darker colourway on the keys with a word on
+ * them — the geometry does the work, not lighting. What it does *not* copy is
+ * the stagger: this layout is alphabetical rather than QWERTY, for the reason
+ * `@shared/osk.ts` records, so a stagger here would be decoration pretending to
+ * be a keyboard's plan.
+ *
+ * `--accent` and `--kb-scale` are set on the host from `pointer:restore`; the
+ * defaults below are what must be right on the frame before it arrives. `all:
+ * initial` on `:host` leaves custom properties alone, so both inherit in.
+ */
 const STYLES = `
-  :host { all: initial; }
+  :host {
+    all: initial;
+    --accent: oklch(0.985 0 0);
+    --kb-scale: 1;
+  }
   .layer {
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: 2147483647;
     font-family: system-ui, sans-serif;
-    color: #fafafa;
+    color: #f0f1f3;
+
+    /* Two units, as on the composed keyboard and for the same reason: nothing
+       here is pressed with a finger, so a square cap spends height on nothing.
+       --u sizes it across, --h down, and every type size follows --h because
+       that is the dimension a legend has to fit inside. Smaller than the
+       composed one either way: that one owns the screen, this floats over a
+       page somebody is reading behind it. Seven rows, always.
+       (No backticks in this comment: it lives inside a template literal.) */
+    --u: min(calc(var(--kb-scale) * 4vw), calc(var(--kb-scale) * 84px), calc(86vw / 8.6));
+    --h: min(calc(var(--u) * 0.56), 4.6vh);
+    --gap: calc(var(--u) * 0.08);
+    --vgap: calc(var(--h) * 0.16);
+    --deck: #14171d;
+    --cap: #1e232b;
+    --cap-fn: #171b22;
+    --well: #0b0d11;
+    --line: rgba(250, 250, 250, 0.1);
+    --legend2: #8b919c;
   }
   .cursor {
     position: absolute;
@@ -161,13 +228,14 @@ const STYLES = `
     gap: 14px;
     padding: 8px 16px;
     border-radius: 8px;
-    background: rgba(8, 9, 12, 0.92);
-    border: 1px solid rgba(250, 250, 250, 0.14);
+    background: var(--deck);
+    border: 1px solid var(--line);
     font-size: 12px;
     letter-spacing: 0.04em;
     white-space: nowrap;
+    color: var(--legend2);
   }
-  .hint b { font-weight: 600; color: #7dd3fc; margin-right: 5px; }
+  .hint b { font-weight: 600; color: #f0f1f3; margin-right: 5px; }
   .keys {
     position: absolute;
     left: 50%;
@@ -175,34 +243,67 @@ const STYLES = `
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 14px;
+    gap: var(--vgap);
+    padding: calc(var(--u) * 0.2);
     border-radius: 12px;
-    background: rgba(8, 9, 12, 0.96);
-    border: 1px solid rgba(250, 250, 250, 0.14);
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+    background: var(--deck);
+    border: 1px solid var(--line);
   }
-  .row { display: flex; gap: 6px; justify-content: center; }
+  .row { display: flex; gap: var(--gap); justify-content: center; }
   .key {
-    min-width: 46px;
-    height: 42px;
-    padding: 0 10px;
+    position: relative;
+    flex: 0 0 var(--u);
+    height: var(--h);
     display: grid;
     place-items: center;
     border-radius: 6px;
-    border: 1px solid rgba(250, 250, 250, 0.14);
-    background: rgba(250, 250, 250, 0.06);
-    font-size: 15px;
+    border: 1px solid var(--line);
+    background: var(--cap);
+    font-size: calc(var(--h) * 0.52);
     font-variant-numeric: tabular-nums;
   }
-  .key[data-wide='1'] { font-size: 11px; letter-spacing: 0.08em; }
-  .key[data-on='1'] {
-    border-color: #7dd3fc;
-    background: #7dd3fc;
-    color: #08090c;
-    transform: scale(1.06);
+  /* Words rather than characters: the darker colourway of a keycap set's
+     modifiers. Proportional rather than sized in units, so five keys come out
+     exactly as wide as the eight above them — a bottom row wider than its own
+     keyboard is the thing that stops this reading as one object. */
+  .key[data-wide='1'] {
+    flex: 3 0 0;
+    min-width: 0;
+    padding: 0 calc(var(--u) * 0.1);
+    background: var(--cap-fn);
+    color: var(--legend2);
+    /* Floored, here and on the badge below: flattening the keys pulled every
+       type size down with --h, and at the 80% setting these landed under the
+       launcher's own smallest text. The size setting may shrink the keyboard;
+       it may not make the words on it unreadable from three metres. */
+    font-size: max(13px, calc(var(--h) * 0.32));
+    font-weight: 600;
+    letter-spacing: 0.1em;
   }
-  .key[data-lit='1'] { border-color: #7dd3fc; color: #7dd3fc; }
+  /* The bar, and the only key here allowed to be obviously the widest. */
+  .key[data-kind='space'] { flex: 8 0 0; }
+  /* The pad button that reaches this key. Top right, as on the other keyboard. */
+  .key::after {
+    content: var(--sc, '');
+    position: absolute;
+    top: calc(var(--h) * 0.09);
+    right: calc(var(--u) * 0.08);
+    color: var(--legend2);
+    font-size: max(11px, calc(var(--h) * 0.27));
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+  .key[data-on='1'] {
+    z-index: 1;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--well);
+    box-shadow: 0 0 0 2px var(--deck), 0 0 0 4px var(--accent);
+    transform: scale(1.04);
+  }
+  .key[data-on='1']::after { color: var(--well); opacity: 0.65; }
+  .key[data-lit='1'] { border-color: var(--accent); color: var(--accent); }
 `
 
 /** A plain arrow. Inline SVG so it needs nothing from the page and no network. */
@@ -223,6 +324,9 @@ function ensureUi(): boolean {
   // click away from the page it is floating over.
   host.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647'
   document.documentElement.appendChild(host)
+  hostNode = host
+  // Whatever arrived before there was a document to hang this on.
+  applyLook()
 
   root = host.attachShadow({ mode: 'closed' })
 
@@ -260,7 +364,14 @@ function buildKeyboard(): HTMLElement {
     for (const key of row) {
       const node = document.createElement('div')
       node.className = 'key'
-      if (key.kind !== 'char') node.dataset.wide = '1'
+      if (key.kind !== 'char') {
+        node.dataset.wide = '1'
+        node.dataset.kind = key.kind
+      }
+      // `content` needs a quoted string, and the quotes have to be inside the
+      // property value — `content: var(--sc)` inserts it verbatim.
+      const shortcut = OSK_SHORTCUTS[key.kind]
+      if (shortcut) node.style.setProperty('--sc', `"${shortcut}"`)
       node.textContent = oskLabel(key, false)
       rowNode.appendChild(node)
       keyNodes.set(key.id, node)
@@ -280,9 +391,12 @@ function buildKeyboard(): HTMLElement {
  * legend.
  */
 function hintText(): string {
+  // With the keyboard up it names only what is *not* already printed on a
+  // keycap. Space, Enter, Delete and Close carry their own button now, and
+  // repeating them here would be the legend competing with the keyboard.
   return keyboardOpen
-    ? '<span><b>A</b>Type</span><span><b>LB+RB</b>Hide keyboard</span>' +
-        '<span><b>B</b>Hide keyboard</span><span><b>☰</b>Exit pointer</span>'
+    ? '<span><b>Stick / D-pad</b>Move</span><span><b>A</b>Press key</span>' +
+        '<span><b>☰</b>Exit pointer</span>'
     : '<span><b>A</b>Click</span><span><b>B</b>Right click</span>' +
         '<span><b>LB+RB</b>Keyboard</span><span><b>☰</b>Exit pointer</span>'
 }
@@ -409,6 +523,7 @@ function setMode(next: boolean, reason: string): void {
       }
     }
     held = []
+    heldCompose = []
   }
 
   send({ kind: 'mode', active })
@@ -437,6 +552,27 @@ function pressKeyboardKey(key: OskKey): void {
   }
 }
 
+/**
+ * The two keys X and Y reach without walking to them.
+ *
+ * Routed through `pressKeyboardKey` with the key from the layout rather than
+ * sending the character directly, so a shortcut and the keycap it is printed on
+ * can never mean two different things — which is the whole claim that badge
+ * makes. Only while the keyboard is up: outside it these two are unmapped, and
+ * with a bare cursor on screen the face buttons are a mouse.
+ */
+function onComposeAction(action: ComposeActionName): void {
+  const kind = action === 'space' ? 'space' : 'enter'
+  for (const row of OSK_ROWS) {
+    for (const key of row) {
+      if (key.kind === kind) {
+        pressKeyboardKey(key)
+        return
+      }
+    }
+  }
+}
+
 /** LB + RB, and it is a toggle in both directions. */
 function toggleKeyboard(): void {
   keyboardOpen = !keyboardOpen
@@ -453,7 +589,16 @@ function onAction(action: PointerActionName, down: boolean): void {
       const key = oskKeyAt(OSK_ROWS, keyboardAt)
       if (key) pressKeyboardKey(key)
     } else if (action === 'rightClick') {
-      keyboardOpen = false
+      // **B is a backspace here, and it used to hide the keyboard.** The two
+      // keyboards in this product could not both be true with B meaning one
+      // thing on one and something else on the other, and a badge that lies is
+      // worse than no badge. Backspace is also the more useful of the two by
+      // far: this types into password fields, where a mistyped character is
+      // invisible and the only correction was to walk the selection over to
+      // DEL. Two ways out remain — LB + RB, the chord that opened it, and ☰,
+      // which ends the mode outright — so the rule that a mode must not have a
+      // single exit still holds.
+      send({ kind: 'key', key: 'Backspace' })
     } else if (action === 'exit') {
       setMode(false, '☰ while the keyboard was up')
     }
@@ -501,6 +646,7 @@ function poll(): void {
   if (!active) {
     lastSample = now
     held = []
+    heldCompose = []
     return
   }
 
@@ -522,6 +668,16 @@ function poll(): void {
   held = current
   for (const action of up) onAction(action, false)
   for (const action of down) onAction(action, true)
+
+  // Folded every frame, acted on only while the keyboard is up — see
+  // `heldCompose`. The keyboard may have been closed by one of the edges above,
+  // so this reads `keyboardOpen` after them rather than before.
+  const composeNow = heldActions(sample.buttons, COMPOSE_ACTIONS)
+  const composeEdges = stepPointerButtons(heldCompose, composeNow)
+  heldCompose = composeNow
+  if (keyboardOpen) {
+    for (const action of composeEdges.down) onComposeAction(action)
+  }
 
   if (keyboardOpen) {
     const direction = sample.direction ?? stickDirection(sample.left.x, sample.left.y)
@@ -546,16 +702,33 @@ function poll(): void {
 // ── Start ───────────────────────────────────────────────────────────────────
 
 /**
- * Main replays the mode into every new document.
+ * Main replays the mode, and the look, into every new document.
  *
  * Signing in is three or four navigations and each one re-runs this file from
  * nothing. Without this the cursor would die at every step of the one flow it
  * exists for.
+ *
+ * The accent and the keyboard size ride the same message because this preload
+ * cannot read settings — it exposes nothing and invokes nothing — and because
+ * main re-sends it whenever they change, so a keyboard on screen while the
+ * Settings row is touched follows rather than waiting for a navigation.
+ *
+ * Shape-checked rather than trusted. Not because main is a threat, but because
+ * this payload was a bare boolean once, and a build that mixes the two would
+ * otherwise leave `setMode` reading `active` off an object.
  */
 ipcRenderer.on(POINTER_RESTORE, (_event, next: unknown) => {
-  if (typeof next !== 'boolean') return
+  if (typeof next !== 'object' || next === null) return
+  const restore = next as Partial<PointerRestore>
+  if (typeof restore.active !== 'boolean') return
+
+  if (typeof restore.accent === 'string' && typeof restore.scale === 'number') {
+    look = { accent: restore.accent, scale: restore.scale }
+    applyLook()
+  }
+
   lastSample = performance.now()
-  setMode(next, 'restored after a navigation')
+  setMode(restore.active, 'restored after a navigation')
 })
 
 /**

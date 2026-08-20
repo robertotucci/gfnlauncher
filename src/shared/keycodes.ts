@@ -32,6 +32,24 @@ import type { PointerKeyName } from './pointer'
 const FIRST_PRINTABLE = 0x20
 const LAST_PRINTABLE = 0x7e
 
+/**
+ * Latin-1, which is where the accented letters live.
+ *
+ * The compose keyboard follows the system's own layout, so on an Italian
+ * session it draws è, à, ò, ù, é, ç, ° and §, and a keyboard that draws a key
+ * which types nothing is worse than one that never offered it. X11 keysyms for
+ * Latin-1 are the code point, exactly as for ASCII, so this extends the same
+ * identity rather than adding a table.
+ */
+const FIRST_LATIN1 = 0xa0
+const LAST_LATIN1 = 0xff
+
+/**
+ * Everything above Latin-1, by the convention X11 defines for it: the code
+ * point with this added. `€` is the one that turns up on a European layout.
+ */
+const UNICODE_KEYSYM = 0x0100_0000
+
 /** The named keys, which are not characters and so are not code points. */
 const NAMED_KEYSYMS: Readonly<Record<PointerKeyName, number>> = {
   Backspace: 0xff08,
@@ -43,16 +61,25 @@ const NAMED_KEYSYMS: Readonly<Record<PointerKeyName, number>> = {
 /**
  * The X11 keysym for a single character, or null if it is not one we send.
  *
- * Latin-1 keysyms are the code point, and printable ASCII is a subset of
- * Latin-1 — so this is an identity with a range check rather than a mapping.
- * The range check is the part that matters: it is what stops an unexpected
- * string reaching the compositor as an arbitrary keysym.
+ * Three ranges and no table. Printable ASCII and Latin-1 keysyms *are* the code
+ * point; everything above that is the code point plus `UNICODE_KEYSYM`, which
+ * is X11's own escape hatch for the rest of Unicode. What is rejected is the
+ * part that matters: control characters, and anything that is not one whole
+ * character — this ends up at a compositor, and an unexpected string must not
+ * become an arbitrary keysym.
  */
 export function keysymForChar(char: string): number | null {
-  if (char.length !== 1) return null
+  if ([...char].length !== 1) return null
+
   const code = char.codePointAt(0)
-  if (code === undefined || code < FIRST_PRINTABLE || code > LAST_PRINTABLE) return null
-  return code
+  if (code === undefined) return null
+
+  if (code >= FIRST_PRINTABLE && code <= LAST_PRINTABLE) return code
+  if (code >= FIRST_LATIN1 && code <= LAST_LATIN1) return code
+  // The C1 block, and everything below space, is control characters.
+  if (code < FIRST_LATIN1) return null
+
+  return UNICODE_KEYSYM + code
 }
 
 /** The X11 keysym for one of the named keys. */

@@ -468,14 +468,31 @@ async function runCapture(options: CaptureOptions): Promise<CapturedSession> {
       // draws a cursor over the page; it calls `exposeInMainWorld` nowhere, so
       // the site gains nothing it did not already have — `window.launcher` and
       // `require` are both still undefined in the world NVIDIA's code runs in.
-      preload: POINTER_PRELOAD
+      //
+      // **Only when the window will be shown.** See the note below; the two go
+      // together and this is the half that decides it.
+      preload: interactive ? POINTER_PRELOAD : undefined
     }
   })
 
-  // Paired with the preload above rather than left to a caller. A window with
-  // the script and no registration is a cursor whose every command main
-  // refuses, and the symptom of that is a pad that does nothing.
-  registerPointerTarget(window, 'the sign-in window')
+  /**
+   * Paired with the preload above rather than left to a caller. A window with
+   * the script and no registration is a cursor whose every command main
+   * refuses, and the symptom of that is a pad that does nothing.
+   *
+   * **A headless capture gets neither, and that is the fix for a real bug.**
+   * This window is created `show: false` and only revealed `if (interactive)`
+   * — a top-up runs at every start and lives ninety seconds behind everything
+   * with nobody able to see it. It was still reading the pad. So the chord was
+   * answered by an invisible window: the cursor and the on-screen keyboard were
+   * drawn into a page that is never on screen, LB + RB looked dead, and
+   * `isPointerActive()` — which exists so two cursors can never be up at once —
+   * reported a cursor nobody could point at. That last one is the worst of the
+   * three, because it is what tells the *desktop* backend to stand down: a
+   * background capture could silently take L3 + R3 away from the whole desktop
+   * for a minute and a half.
+   */
+  if (interactive) registerPointerTarget(window, 'the sign-in window')
 
   // Token and vpcId are gathered independently and combined when both are in.
   const found: {
