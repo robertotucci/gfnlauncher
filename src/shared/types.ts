@@ -7,6 +7,7 @@
 
 import type { BluetoothAction } from './bluetooth'
 import type { ScreenOwnership } from './input'
+import type { DeviceKind, Notice } from './notify'
 import type { PadProfile } from './padLayout'
 import { DEFAULT_ACCENT, DEFAULT_KEYBOARD_SCALE, DEFAULT_UI_SCALE } from './theme'
 
@@ -690,18 +691,13 @@ export interface Diagnostics {
  * class-of-device integer. Both are resolved to one of these on the main side
  * by `deviceKind`, so the renderer picks a glyph from a closed union instead of
  * pattern-matching a string somebody else owns.
+ *
+ * It is an alias rather than a list of its own, and the list moved to
+ * `@shared/notify` — the notice raised when a controller arrives over USB wants
+ * the same ten words, and nothing about them is Bluetooth. Widening it there
+ * widens both, which is the point.
  */
-export type BluetoothKind =
-  | 'gamepad'
-  | 'headset'
-  | 'headphones'
-  | 'speaker'
-  | 'keyboard'
-  | 'mouse'
-  | 'phone'
-  | 'computer'
-  | 'display'
-  | 'unknown'
+export type BluetoothKind = DeviceKind
 
 export interface BluetoothDevice {
   /**
@@ -1051,5 +1047,15 @@ export interface LauncherApi {
      * cannot see a pad at all.
      */
     onPointerMode(listener: (active: boolean) => void): () => void
+    /**
+     * What should be on the notice stack, whenever that changes.
+     *
+     * The whole list, not one notice: main owns the queue and the timers, so a
+     * surface never decides when a card goes — see `@shared/notify` for why the
+     * lifecycle lives there rather than in a component. A surface that should
+     * be showing nothing receives an empty list, which is how the stack moves
+     * between this window and the overlay drawn over a running game.
+     */
+    onNotice(listener: (notices: Notice[]) => void): () => void
   }
 }

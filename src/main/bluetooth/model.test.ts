@@ -4,6 +4,8 @@ import {
   BATTERY_IFACE,
   DEVICE_IFACE,
   buildSnapshot,
+  connectedDevices,
+  connectionChanges,
   describeBluezError,
   deviceKind,
   findAdapter,
@@ -14,7 +16,8 @@ import {
   withoutInterfaces,
   withProperties,
   type BluetoothState,
-  type BluezTree
+  type BluezTree,
+  type ConnectedDevice
 } from './model'
 
 /**
@@ -335,5 +338,81 @@ describe('describeBluezError', () => {
     expect(describeBluezError(undefined, 'BlueZ did not answer Pair in time')).toBe(
       'BlueZ did not answer Pair in time'
     )
+  })
+})
+
+describe('connectedDevices', () => {
+  it('lists only the links that are up, keyed by address', () => {
+    const connected = connectedDevices(tree())
+
+    expect([...connected.keys()]).toEqual(['A0:AB:51:11:22:33'])
+    expect(connected.get('A0:AB:51:11:22:33')).toEqual({
+      address: 'A0:AB:51:11:22:33',
+      name: 'DualSense Wireless Controller',
+      kind: 'gamepad'
+    })
+  })
+
+  it('prefers the alias, which is the name the user gave it', () => {
+    // The pad's `Name` is the generic "Wireless Controller"; the alias is what
+    // BlueZ shows everywhere else and what a card has to agree with.
+    expect(connectedDevices(tree()).get('A0:AB:51:11:22:33')?.name).not.toBe('Wireless Controller')
+  })
+
+  it('skips an object with no address rather than inventing a key', () => {
+    const partial = readManagedObjects(
+      managedObjects({
+        '/org/bluez/hci0/dev_x': { [DEVICE_IFACE]: { Connected: variant('b', true) } }
+      })
+    )
+
+    expect(connectedDevices(partial).size).toBe(0)
+  })
+})
+
+describe('connectionChanges', () => {
+  const device = (address: string, name = 'WH-1000XM4'): ConnectedDevice => ({
+    address,
+    name,
+    kind: 'headphones'
+  })
+
+  const set = (...devices: ConnectedDevice[]): Map<string, ConnectedDevice> =>
+    new Map(devices.map((entry) => [entry.address, entry]))
+
+  it('reports a link that has come up', () => {
+    const change = connectionChanges(set(), set(device('38:18:4C:44:55:66')))
+
+    expect(change.connected).toEqual([device('38:18:4C:44:55:66')])
+    expect(change.disconnected).toEqual([])
+  })
+
+  it('reports one that has gone, with the name it had while it was there', () => {
+    // BlueZ may drop the object entirely on disconnect, so the remembered entry
+    // is the only thing left that can name it.
+    const change = connectionChanges(set(device('38:18:4C:44:55:66')), set())
+
+    expect(change.disconnected).toEqual([device('38:18:4C:44:55:66')])
+    expect(change.connected).toEqual([])
+  })
+
+  it('says nothing when only an unrelated property moved', () => {
+    // This runs after *every* signal, and during a scan those arrive several a
+    // second as RSSI moves. Almost all of them have to be silent.
+    const live = set(device('38:18:4C:44:55:66'))
+
+    expect(connectionChanges(live, live)).toEqual({ connected: [], disconnected: [] })
+  })
+
+  it('treats a rename as the same device rather than a swap', () => {
+    // The address is the one thing about a Bluetooth device that does not
+    // change; keying on the name would announce a departure and an arrival for
+    // somebody renaming their headset in the desktop's own settings.
+    const change = connectionChanges(
+      set(device('38:18:4C:44:55:66', 'WH-1000XM4')),
+      set(device('38:18:4C:44:55:66', 'Sony headphones'))
+    )
+
+    expect(change).toEqual({ connected: [], disconnected: [] })
   })
 })

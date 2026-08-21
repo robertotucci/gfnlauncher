@@ -33,8 +33,31 @@ If it earned a place on your television, a donation is the most direct encourage
 - The official **GeForce NOW Flatpak**, `com.nvidia.geforcenow`
 - A gamepad — Xbox, PlayStation and 8BitDo pads all report the standard layout
 - Any Linux distribution with Flatpak
+- Any desktop — see [desktops it runs on](#desktops-it-runs-on). The one thing the launcher asks of yours is `systemd` or `elogind`, which the Power menu calls to suspend, restart and turn off
 
 You do not need a GeForce NOW account to browse or to launch: the deep link goes to the local client, so **launching games works signed out**. Signing in adds your library and ownership.
+
+## Desktops it runs on
+
+Nothing here is written for one desktop. The launcher draws its own window, reads the pad from the kernel, writes a plain XDG autostart entry, ends the session through logind and asks for a cursor through a portal — every one of which is the same on Plasma, GNOME and everything else. Two things are not, and both are below the table: which on-screen keyboard you get, and where the keyboard layout is read from.
+
+| Desktop | Notes |
+| --- | --- |
+| **KDE Plasma**, Wayland | Everything. This is where it was written and where every measurement in [ARCHITECTURE.md](./ARCHITECTURE.md) was taken |
+| **GNOME**, Wayland | Everything, with the launcher drawing its own keyboard rather than borrowing GNOME's — see below |
+| **Cinnamon, Budgie, Xfce, MATE, LXQt, Pantheon, Deepin** | The same. These reuse GNOME's or KDE's portal, which is what the desktop cursor goes through |
+| **sway, Hyprland and other wlroots compositors** | Everything except the desktop cursor: `xdg-desktop-portal-wlr` implements screen capture and not `RemoteDesktop`. Autostart also needs something that runs XDG entries — `dex`, or your compositor's own `exec-once` |
+| **Any X11 session** | Raising the launcher after a game is *more* reliable than on Wayland, not less. Whether the desktop cursor works depends on your portal backend, which on X11 varies by desktop |
+
+The one thing in that table worth checking rather than assuming is the desktop cursor, and it tells you: if the portal is not there, the chord logs `Could not start the desktop pointer` and nothing else changes. The cursor inside the launcher's own windows — the sign-in page and the web player, which is what it is mostly for — needs no portal and works everywhere.
+
+**The on-screen keyboard is always the launcher's own, except on KDE.** There is no cross-desktop protocol for "show the keyboard": GNOME has one and raises it for touch input with no way to ask, and the rest have none at all. So on every desktop but Plasma the launcher stops trying to borrow one and draws a full keyboard itself, which is the path that works everywhere and the only one that types into a streamed game. You lose nothing by not being on KDE here — on Plasma the launcher asks first, and Plasma declines too unless the machine has a touchscreen.
+
+**It types in your keyboard's layout, not your language's**, and it finds that out four ways: `XKB_DEFAULT_LAYOUT`, then your desktop's own setting on Plasma and on the GNOME family, then `localectl`'s system layout, and only then the locale. Six layouts ship — US, UK, Italian, German, French, Spanish — and anything else gets US QWERTY with every printable character still reachable.
+
+**Coming back after a game is a request on every Wayland compositor**, and neither KWin nor Mutter is obliged to grant it: a client cannot raise itself without an activation token, and no application can mint one for itself. The launcher asks in four ways, logs what it got, and goes on answering the pad either way — see [reporting a problem](#reporting-a-problem) if yours does not come back. On X11 this is simply not an issue.
+
+Two honest notes. Everything above that says *measured* was measured on Plasma 6.7 under Wayland, because that is the machine this is developed on; the rest is read from the protocols and the portal implementations rather than from a screen. And the launcher writes the desktop it detected on the second line of its log, so a report never has to guess.
 
 ## Install
 
@@ -140,7 +163,7 @@ The keyboard is on the shoulders rather than on a face button because with a cur
 Two things to know before you use it in a game:
 
 - **The pad still reaches the game.** GeForce NOW reads the controller itself and forwards it, and the launcher does not take it away — doing so would need to seize the device, and a bug in putting it back would leave you with no controller at all. So while the cursor is up the stick moves it *and* whatever the game does with a stick. In the situation this is for — a dialog on top of a game that is not listening — that costs nothing. It is why the chord is a deliberate hold rather than a click.
-- **The on-screen keyboard is launcher-windows only**, so **LB + RB** does nothing out here. This is measured rather than assumed: a window created the way an overlay would have to be — `focusable: false`, always on top, shown without activating — still took the focus away from the window underneath it on KDE Wayland. The focus is exactly what decides where a keystroke lands, so a keyboard drawn that way types into itself. The cursor works everywhere; typing works where the launcher owns the window. If you need to type into a game, [AntiMicroX](#a-full-keyboard-on-the-pad-everywhere--antimicrox) is the answer, and it is kernel-side for the same reason.
+- **The on-screen keyboard is launcher-windows only**, so **LB + RB** does nothing out here. This is measured rather than assumed: a window created the way an overlay would have to be — `focusable: false`, always on top, shown without activating — still took the focus away from the window underneath it on KDE Wayland, and nothing in the protocol makes that a KDE quirk: an ordinary Wayland toplevel cannot float over another client's fullscreen surface without becoming the focused window. The focus is exactly what decides where a keystroke lands, so a keyboard drawn that way types into itself. The cursor works everywhere; typing works where the launcher owns the window. If you need to type into a game, [AntiMicroX](#a-full-keyboard-on-the-pad-everywhere--antimicrox) is the answer, and it is kernel-side for the same reason.
 
 ## What is in it
 
@@ -190,7 +213,9 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 | `--talk-name=org.freedesktop.Flatpak` | Running commands on the host: `flatpak` to launch the GeForce NOW client with a deep link and to stop a running one first, `systemctl` for the power menu, and writing the autostart entry into your real `~/.config/autostart` |
 | `--device=all` | Reading the gamepad, and the GPU |
 | `--filesystem=/run/udev:ro` | Recognising a pad that was already switched on before the launcher started. The line above opens the device node; this is the udev database Chromium reads to know that the node *is* a gamepad. Without it, a pad is only seen if it is connected — or switched off and on again — after the launcher is running |
-| `--talk-name=org.gnome.SessionManager`, `…PowerManagement`, `…ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one, rather than the whole session bus for one call |
+| `--talk-name=org.gnome.SessionManager`, `--talk-name=org.freedesktop.PowerManagement`, `--talk-name=org.freedesktop.ScreenSaver` | Asking the session not to blank the screen while you are browsing with the pad. Three names because each desktop answers on a different one — GNOME on the first, KDE and Xfce on the second, and the third is the interface the freedesktop idle specification defines — rather than the whole session bus for one call |
+| `--talk-name=org.kde.KWin` | Asking KDE to raise its own on-screen keyboard, which is the only desktop that can be asked. Absent everywhere else and never called there: the launcher resolves the desktop before it opens a bus, and draws its own keyboard instead. Revoke it on KDE and you get the same keyboard, one line in the log, and the command to put it back |
+| `--system-talk-name=org.freedesktop.locale1` | Reading `localectl`'s keyboard layout, so the keyboard the launcher draws matches the one on your desk. The last of four sources, and the only one that answers on Xfce, MATE, LXQt and a bare compositor. A property read — `localectl` needs polkit to *change* a layout and nothing to report one. Revoke it and the keyboard still opens, in the layout your locale implies |
 | `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` | Reading which datacenter your client is set to stream from, for the Status screen — and noticing when a game has finished, so the launcher can close the client and take the screen back |
 | `--filesystem=…/flatpak/app/com.nvidia.geforcenow:ro` | Reading the GeForce NOW client's own service configuration instead of hardcoding NVIDIA's hostnames |
 | `--system-talk-name=org.bluez` | [Pairing a device](#pairing-a-device). The only name on the system bus, and the same calls your desktop's Bluetooth panel makes as the same unprivileged user — BlueZ's own policy allows them, and there is no polkit on this path. It is `talk` rather than `see` because BlueZ calls *back* to ask whether a pairing code matches |
@@ -200,7 +225,7 @@ flatpak info --show-permissions io.github.robertotucci.GfnLauncher
 
 **`--talk-name=org.freedesktop.Flatpak` is effectively an exit from the sandbox**, and there is no way around it for an app whose entire purpose is to drive another Flatpak. There is no portal for "launch this Flatpak with these arguments" — the deep link is an argv, not a URI scheme — and stopping a running client needs the host too. If that trade is not one you want to make, the AppImage does the same things with no sandbox at all, which is at least honest about it.
 
-It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three screen names under it, and the BlueZ one, are ordinary services being asked a question; none of them can run anything.
+It is also the *only* permission that leaves the sandbox. The autostart entry goes through it rather than through a second `--filesystem=xdg-config/autostart:create`, precisely so there is one door to inspect rather than two. The three screen names under it, KWin, localed and BlueZ are ordinary services being asked a question; none of them can run anything.
 
 **Nothing in that list is what gives the cursor the desktop.** [Pointer mode](#pointer-mode--the-pad-as-a-mouse) outside the launcher's own windows goes through `org.freedesktop.portal.RemoteDesktop`, which is a portal — Flatpak permits every application to talk to the portals, and a portal is the sanctioned way out precisely because *you* answer for it, once, in a dialog the launcher cannot draw or dismiss. That is also why it needed no new line above, and why the alternative was rejected: a virtual device through `/dev/uinput` would have wanted `--device=all` to mean rather more than reading a pad, plus a udev rule installed as root. Revoke it in your desktop's remote-control or screen-sharing settings and the cursor stops at the launcher's own windows, where it needs nothing.
 
@@ -239,7 +264,7 @@ A gamepad is not an input device as far as a compositor's idle timer is concerne
 paru -S joystickwake
 ```
 
-Packaged as `joystickwake` in Debian unstable and Ubuntu 26.10; everywhere else it is one Python file to copy into your `PATH`. On Plasma under Wayland the stock wake commands do not take, and it needs the custom one documented upstream.
+Packaged as `joystickwake` in Debian unstable and Ubuntu 26.10; everywhere else it is one Python file to copy into your `PATH`. Its stock wake commands do not take on Plasma under Wayland, where it needs the custom one documented upstream; check its own README for whichever desktop you are on before assuming it is working.
 
 ### Drivers, only where the kernel runs out
 
@@ -258,6 +283,8 @@ paru -S xone-dkms xone-dongle-firmware  # the Xbox Wireless Adapter
 paru -S dualsensectl                    # battery, lightbar, powering the pad off
 paru -S game-devices-udev               # permissions for pads no rule covers yet
 ```
+
+`paru` because that is what this was written on; the package names are the same in the AUR and mostly the same elsewhere. On Debian and Ubuntu it is `apt install dualsensectl game-devices-udev`, with `xpadneo-dkms` in unstable; on Fedora, `dnf install dualsensectl` and the two DKMS modules from upstream. Use whatever helper you already have — none of this is required, and the launcher drives every pad the kernel already exposes without any of it.
 
 `xpadneo` and `xone` are DKMS modules: they want your kernel headers and they rebuild on every kernel update, and `xone` disables `xpad`, so install it only if you actually own the dongle. Debian has `xpadneo-dkms` in unstable, Fedora has neither, and upstream's installer is the path in both cases — [xpadneo](https://github.com/atar-axis/xpadneo), and [xone](https://github.com/dlundqvist/xone), which is the maintained fork.
 

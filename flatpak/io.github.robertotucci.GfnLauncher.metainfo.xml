@@ -115,6 +115,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.4" date="2026-08-21">
+      <description>
+        <p>The launcher now works properly on every desktop rather than only on KDE, reads controllers Linux has no table for, and says out loud when the pad's mouse turns on or a device connects.</p>
+        <ul>
+          <li>The on-screen keyboard is drawn in your session's own layout on any desktop, and a desktop without a keyboard of its own is no longer told to install a KDE package</li>
+          <li>Four more keyboards: German, French, Spanish and UK</li>
+          <li>Fixed: controllers Linux has no translation table for — generic USB pads and several third-party ones — had a dead d-pad, the wrong face buttons, and the menu button that starts a game landing on a stick click</li>
+          <li>Fixed: a flight stick or a wheel plugged in beside the pad no longer presses buttons in the launcher</li>
+          <li>A notice slides in at the top right when the pad's mouse goes on or off, and when a controller or a Bluetooth device connects or disconnects — visible over a running game</li>
+          <li>Suspend, restart and turn off work on distributions without systemd, through loginctl</li>
+          <li>Settings → Controllers and Bluetooth lists the controllers that are connected, and how each one is attached</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.4</url>
+    </release>
     <release version="0.1.3" date="2026-08-20">
       <description>
         <p>LB + RB now types outside the launcher too — on the desktop, and inside a running game. Bluetooth devices can be paired from the launcher.</p>

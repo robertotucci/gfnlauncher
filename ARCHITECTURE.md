@@ -42,7 +42,7 @@ Three details are not what you would guess, and were checked against flatpak 1.1
 
 `autostart.ts` is where the sandbox does the most damage quietly, because it writes a file, does not fail, and simply never starts anything. Three things vary with the install:
 
-- **`XDG_CONFIG_HOME` is the wrong answer inside a Flatpak.** The runtime points it at `~/.var/app/<id>/config`, which nothing at login reads. The real `~/.config/autostart` is bind-mounted at its true path by `--filesystem=xdg-config/autostart:create`, so the literal path is the portable one and the environment variable is the trap. Outside a sandbox it still wins, because there it means what it says.
+- **`XDG_CONFIG_HOME` is the wrong answer inside a Flatpak.** The runtime points it at `~/.var/app/<id>/config`, which nothing at login reads, so the literal `~/.config/autostart` is the portable path and the environment variable is the trap. Outside a sandbox it still wins, because there it means what it says. Note that the sandbox does **not** carry `--filesystem=xdg-config/autostart:create` — an earlier version of this line said it did, and the manifest has never granted it. The write goes out through `hostWriteFile`, on the host permission this module already needs, precisely so there is one door to inspect rather than two.
 - **`Exec=` cannot be the running executable** in either packaged form — `/app/…` exists only inside the sandbox, and an AppImage's mount path is temporary. So it is `flatpak run <id>`, `$APPIMAGE`, or the exe path, in that order.
 - **`Icon=` is a theme name, not a path**, and the name differs: the `.deb` installs `gfn-launcher`, a Flatpak installs under the app id.
 
@@ -50,9 +50,23 @@ Three details are not what you would guess, and were checked against flatpak 1.1
 
 Two more things the sandbox needs, which are permissions rather than code: `--filesystem=~/.var/app/com.nvidia.geforcenow:ro` for the Status screen's read of `sharedstorage.json`, and read access to the Flatpak install roots for `appConfig.ts`. Both degrade rather than throw when denied.
 
-A third arrived with [Bluetooth pairing](#pairing-a-device) and is the only one on the **system** bus: `--system-talk-name=org.bluez`. It is not a host escape — BlueZ's own shipped D-Bus policy grants the default context `send_destination="org.bluez"`, which is how any user session pairs a headset — and its denial is legible, since every call answers `AccessDenied` and the screen prints the `flatpak override` that grants it back.
+A third arrived with [Bluetooth pairing](#pairing-a-device) and is the only one on the **system** bus: `--system-talk-name=org.bluez`. It is used from the first seconds of the run rather than from the first visit to the Devices screen, because [Notices](#notices) needs to hear a headset connect; its denial is unchanged and still legible. It is not a host escape — BlueZ's own shipped D-Bus policy grants the default context `send_destination="org.bluez"`, which is how any user session pairs a headset — and its denial is legible, since every call answers `AccessDenied` and the screen prints the `flatpak override` that grants it back.
 
-A fourth, and the only one whose denial is undetectable: the three `--talk-name`s that let `displaySleep.ts` inhibit screen blanking. A `powerSaveBlocker` whose D-Bus call the sandbox refused still hands back a valid blocker id and still reports `isStarted()`, so there is nothing to classify and nothing to surface — the symptom is the screen blanking, which is also the symptom of not having asked. Chromium picks the interface the session offers, hence three names rather than one.
+A fourth, and the only one whose denial is undetectable: the three `--talk-name`s that let `displaySleep.ts` inhibit screen blanking. A `powerSaveBlocker` whose D-Bus call the sandbox refused still hands back a valid blocker id and still reports `isStarted()`, so there is nothing to classify and nothing to surface — the symptom is the screen blanking, which is also the symptom of not having asked. Chromium picks the interface the session offers, hence three names rather than one, and note that all three are already there for every desktop: GNOME answers on `org.gnome.SessionManager`, KDE and Xfce on `org.freedesktop.PowerManagement`, and `org.freedesktop.ScreenSaver` is what the freedesktop idle specification defines.
+
+A fifth and a sixth belong to the keyboard, and both degrade to a sentence rather than to a fault: `--talk-name=org.kde.KWin` is the one desktop that can be asked to raise an on-screen keyboard, and `--system-talk-name=org.freedesktop.locale1` is the last of four ways to find out which *layout* to draw. Their denials cost a keyboard the launcher draws itself anyway, and a layout the locale can guess at. See [Which keyboard the person actually has](#which-keyboard-the-person-actually-has).
+
+## Which desktop this is
+
+`src/main/desktop.ts`, and the reason it is four paragraphs rather than a one-line `includes('KDE')` is that the rule about *using* it is the interesting part.
+
+**Detect the desktop to say the right sentence and read the right setting, never to change behaviour.** Almost everything here is desktop-agnostic by construction — XDG autostart, `systemctl` through logind, `org.freedesktop.portal.RemoteDesktop`, `powerSaveBlocker` with Chromium picking whichever inhibit interface the session offers — and the parts that are *not* agnostic are the ones that fail open on purpose. `restoreLauncher` is a ladder of five requests ordered cheapest-and-most-portable-first, `shouldAcceptInput` accepts on every unknown, and `stepAside` drops fullscreen because compositors disagree. A branch on `DESKTOP.id` in any of those is how you fix one desktop and break another, silently, on hardware nobody here owns. There are exactly two consumers: the startup log line, and the on-screen-keyboard question above.
+
+`detectDesktop(env)` is pure and takes the environment as an argument, the same bargain `hostEnvironment` makes and for the same reason — the suite has no `vi.stubEnv` anywhere and should not grow one. It reads `XDG_CURRENT_DESKTOP`, which **flatpak forwards into the sandbox**; that was measured rather than assumed, since the whole design would otherwise be dead inside the primary distribution form.
+
+**The order of the name table is the correctness, and it is not alphabetical.** `XDG_CURRENT_DESKTOP` is a colon-separated *list*, and two desktops put `GNOME` in it deliberately: Budgie ships `Budgie:GNOME` so GNOME-targeting applications behave, and Ubuntu ships `ubuntu:GNOME`, which really is GNOME. So the derivatives are matched before the thing they derive from, and `ubuntu` is deliberately not a row at all — it falls through to GNOME, which is the right answer. Two smaller traps are pinned by `desktop.test.ts`: `DESKTOP_SESSION` is a *path* on this machine (`/usr/share/wayland-sessions/plasma.desktop`) and not a bare word, so it needs a basename; and `DISPLAY` is checked *after* `WAYLAND_DISPLAY` rather than instead of it, because a Wayland session running XWayland sets both and is not an X11 session.
+
+An environment that says nothing resolves to `unknown`, which every caller already handles — an unrecognised desktop and an unset variable are the same situation, and the launcher has to start on both.
 
 ## Input and focus
 
@@ -141,7 +155,7 @@ Consequences worth knowing before changing UI code:
 
 **The last row is why main is involved at all.** On Wayland a raise is a request the compositor may refuse — `restoreLauncher` logs `focused=false` after its own `focus()` call, and an autostart entry predating `StartupNotify=true` comes up unfocused at every login. A focus-only gate would turn each of those into a launcher sitting alone on the screen answering nothing, which is worse than the bug and, with no keyboard in the room, unrecoverable. So being unfocused is only disqualifying when *somebody else demonstrably has the screen*, and only main can know that: from inside the window, "GeForce NOW is streaming on top of me" and "a notification took the focus for a second" are the same event.
 
-`src/main/screen.ts` owns that fact and pushes it over `app:screen`, one of four main → renderer channels — the others being `update:progress`, and `gfn:client` and `status:zone` from [the client watch](#following-the-client-while-it-changes). What they have in common is the test a fifth would have to pass: the renderer cannot ask, because it has no way of knowing there is anything to ask about. `handedOff` is set for the whole of a launch (from before `killGfn` runs, so the kill settle is covered), for `gfn:open`, for the web-stream window, and for the sign-in window — the last of these being where the user is typing a password while the grid is driven blind behind it. It is released by `armHandback`'s `onEnded`, which fires however the session watch ends and not only when the client goes away.
+`src/main/screen.ts` owns that fact and pushes it over `app:screen`, one of six main → renderer channels — the others being `update:progress`, `gfn:client` and `status:zone` from [the client watch](#following-the-client-while-it-changes), `pointer:mode`, and `notice:show` from [Notices](#notices). What they have in common is the test each of them had to pass: the renderer cannot ask, because it has no way of knowing there is anything to ask about. `handedOff` is set for the whole of a launch (from before `killGfn` runs, so the kill settle is covered), for `gfn:open`, for the web-stream window, and for the sign-in window — the last of these being where the user is typing a password while the grid is driven blind behind it. It is released by `armHandback`'s `onEnded`, which fires however the session watch ends and not only when the client goes away.
 
 **Everything here fails open.** The renderer starts from `SCREEN_OURS`, a push that never arrives costs correctness rather than control, and a focused window is accepted unconditionally so no latch can gag a launcher somebody is looking at. A stray press behind another window is a bug; a pad that has gone dead on a television is the end of the product.
 
@@ -198,11 +212,23 @@ So the mapping is asked for, once per device at open: `joydevLayout` reproduces 
 
 **Outside them, LB + RB asks the compositor first and composes second.**
 
-`src/main/pointer/systemKeyboard.ts` is the ask: `available` off `org.kde.kwin.VirtualKeyboard`, then `forceActivate`, and the pad would type on KWin's keyboard with the cursor it already has. It costs `--talk-name=org.kde.KWin` and it is KDE-only by construction, there being no cross-desktop protocol for "show the keyboard". Three things make it fail, each of which reads as "the chord is broken":
+`src/main/pointer/systemKeyboard.ts` is the ask, and it is **one question with one branch per desktop** rather than one implementation. `toggleSystemKeyboard` either did it or says why it could not, and only one desktop can say yes:
+
+- **KDE** answers on `org.kde.kwin.VirtualKeyboard`: `available`, then `forceActivate`, and the pad would type on KWin's keyboard with the cursor it already has. It costs `--talk-name=org.kde.KWin`.
+- **GNOME** has an on-screen keyboard and no way to ask for it — the shell raises it for touch focus and exposes no D-Bus member, no portal and no environment variable that means "now". `org.gnome.desktop.a11y.applications screen-keyboard-enabled` is not the missing switch: it is the user's accessibility preference, it still only fires on touch, and turning somebody's accessibility settings on from behind a game grid is a worse thing to do than composing.
+- **Everything else** — Xfce, MATE, LXQt, Cinnamon, sway, Hyprland — has nothing at all, there being no cross-desktop protocol for "show the keyboard".
+
+So away from KDE the answer is `unavailable` with a reason, **decided before a bus is opened**. That ordering is the point rather than an optimisation: the KDE branch's own error text names `plasma-keyboard`, System Settings and a `flatpak override` for `org.kde.KWin`, and for one release every desktop got that sentence — a GNOME user was sent hunting for a KDE package to fix a keyboard that was working. `systemKeyboardReason` is pure and holds the table, so which desktop is told what is assertable without a session bus.
+
+Which desktop this is comes from `src/main/desktop.ts` — see [Which desktop this is](#which-desktop-this-is).
+
+Three things make the KDE branch fail, each of which reads as "the chord is broken":
 
 - **`available` is false until an input method is installed *and* selected.** On Plasma 6.7 the package is `plasma-keyboard`; before it, Maliit.
 - **Selecting one changes nothing until the next login.** KWin takes it as a start-up option (`kwin_wayland --inputmethod`), so `[Wayland] InputMethod` in `kwinrc` is read by the session rather than by the running compositor. `org.kde.KWin.reconfigure` does not help.
 - **And then it still declines.** Measured on Plasma 6.7 with the keyboard installed, selected and running: `available` true, `forceActivate` accepted, `active` true, `activeClientSupportsTextInput` true — and `visible` false, because **`willShowOnActive` is false**. KDE raises that keyboard for touch input, a gamepad is not touch, and this build has no environment variable to say otherwise. So the launcher asks that question *before* claiming anything: `forceActivate` succeeds whether or not a keyboard appears, and trusting it is how a log line came to say `On-screen keyboard shown` to somebody looking at a screen with no keyboard on it.
+
+Which means the composed keyboard below is not the fallback in any meaningful sense — it is what nearly every session gets, and the only path that needs nothing from the desktop.
 
 `src/main/pointer/compose.ts` is what happens when the answer is no, and it is the only route that needs nothing from the desktop: **stop trying to draw and type at the same time.** A window of ours takes the focus — which is allowed, because nothing is being typed yet — collects the whole string on the same alphabetical layout the preload uses, then closes, waits `FOCUS_HANDBACK_MS` for the focus to fall back to whatever had it, and only then sends the characters through the portal as real key events. Real key events are the point: the GeForce NOW client forwards them to the remote machine exactly as it forwards the pad, so this reaches a login box inside a streamed game, which `text-input` would not.
 
@@ -233,6 +259,33 @@ Either keyboard is taken away when the cursor goes. KWin's would otherwise sit o
 
 Keysyms rather than keycodes, and the difference is not academic: a keycode is a *position*, so `KEY_2` shifted is `@` on a US layout and `"` on an Italian one. `src/shared/keycodes.ts` keeps a US keycode table as a fallback for a portal with no keysym support, and says so in the log when it takes it.
 
+#### Which keyboard the person actually has
+
+**A layout is not a language, and for one release this drew the wrong one on every desktop but KDE.** `readSystemLayout` asked `org.kde.KeyboardLayouts` and answered `null` anywhere else, so `compose.ts` fell through to `app.getLocale()` — which is the session *language*. Plenty of people run an English desktop on an Italian keyboard, and it is the keyboard their fingers know; the thing being typed on this keyboard is a password on NVIDIA's sign-in page, which is the one screen the launcher exists to make reachable at all.
+
+So it is a chain, first non-null wins, and `layoutSources(desktop)` is pure so the order is assertable without a bus, a host or a desktop:
+
+| | Source | Answers on | Cost |
+| --- | --- | --- | --- |
+| 1 | `XKB_DEFAULT_LAYOUT` | Plasma, sway, Hyprland | free, and it survives into the sandbox — measured |
+| 2 | `org.kde.KeyboardLayouts` | KDE | one session-bus round trip |
+| 3 | `gsettings get org.gnome.desktop.input-sources sources`, through `host.ts` | GNOME, Cinnamon, Budgie, Pantheon | one host exec, no new permission |
+| 4 | `org.freedesktop.locale1` `X11Layout`, **system bus** | Xfce, MATE, LXQt, any X11 session | `--system-talk-name=org.freedesktop.locale1` |
+| 5 | — | the caller's `app.getLocale()` | what this replaced |
+
+Four things about it are decisions rather than plumbing:
+
+- **The environment is asked first even on KDE**, because it is exact and free and this runs between a pad chord and a window. The desktop's own setting comes second because it is the only one that follows a layout switched mid-session.
+- **localed is last of the four and asked on every desktop, including the two that already answered.** It is the *system* keyboard configuration, so it is right on Xfce, MATE and LXQt and stale where somebody changed their layout in the desktop's own settings — a fallback that is usually right, sitting in front of one that is a different question entirely.
+- **`gsettings` goes through `host.ts` rather than through dconf.** One call then works in both worlds: unsandboxed it reads this user's dconf, sandboxed `flatpak-spawn --host` reads the *host session's*, which is the one holding the answer. Reading dconf directly would have wanted `--filesystem=xdg-run/dconf` and `--talk-name=ca.desktop.dconf` — two permissions for a string the host permission already reaches. `org.freedesktop.portal.Settings` was the other candidate and is not usable: its backends expose a fixed set of namespaces and `org.gnome.desktop.input-sources` is not among them.
+- **Only `xkb` entries count in GNOME's list.** The same setting holds input *methods* — `('ibus', 'mozc-jp')` — whose second field is an engine name, and somebody typing Japanese still has an xkb row underneath for the physical keyboard. Taking entry zero blindly hands `mozc-jp` to `composeLayoutFor`, which knows no such layout and draws US: the exact fault the chain exists to end, at the users least able to work around it.
+
+`parseXkbLayoutList` and `parseGnomeInputSources` are pure and exported for the same reason `nextKeyboardAction` is, and both output shapes were measured rather than guessed — `gsettings` prints its type for an empty list (`@a(ss) []`) and not for a full one, which is not something you would predict. Variants (`de+nodeadkeys`) are dropped, since keeping the suffix turns a layout that ships into one that does not.
+
+**Which source answered is logged.** A wrong layout is the one fault here that looks like a broken keyboard rather than a wrong setting, and until that line existed nothing recorded which of five places had been consulted.
+
+**Six layouts ship**, in `src/shared/keyboardLayout.ts`: US, UK, Italian, German, French, Spanish. They are transcribed from `xkbcli compile-keymap --layout <id>` and **not** from `/usr/share/X11/xkb/symbols/<id>`, which is a set of overrides on an include chain and so describes the keys a layout changed rather than the keyboard anybody has. Two consequences worth knowing: `BKSL` is left of Enter on an ISO keyboard and above it on an ANSI one, so it ends row *three* on all of them but `us`; and a dead key is drawn as, and types, the character it produces on its own — this keyboard has no dead-key state and does not want one, and `^` on a German board is what pressing `^` and then space gives. `composeLayoutFor` also carries a short locale table for the countries whose language is the wrong guess, of which `en_GB` is the one that would bite: xkb calls that layout `gb`, so the language reduction lands on US, where `"` and `@` are swapped.
+
 #### What this changed about everything above
 
 Two hardening changes came with it, and the first fixes a hole that predates the feature:
@@ -241,6 +294,95 @@ Two hardening changes came with it, and the first fixes a hole that predates the
 - **The keyboard mirror is gated now, and the comment that argued against it is gone.** It ran: an unfocused window receives no `keydown`, so the OS has already applied a stricter rule than ours. True of a keyboard somebody is typing on, false the moment the launcher has one of its own — on Wayland the compositor may leave the focus on the launcher while a stream is in front, and a `/` typed into a remote field would open our search.
 
 `pointer:mode` is the **fifth** main → renderer channel and passes the test the other four set: the renderer cannot ask, because the chord that raises the desktop cursor is read from `/dev/input/js*` in main. It exists so the stick moves the cursor without also walking the grid underneath it — a mode check before `emit`, folded into the value handed to `stepPad` so the adoption rule covers the exit for free. `shouldAcceptInput` is untouched.
+
+The **sixth** came later and from the same chord: see [Notices](#notices).
+
+## Notices
+
+Pointer mode is the launcher's most silent feature. The chord flips a mode read off joydev in main, and the only feedback is a cursor appearing — or not appearing, because the setting is off, because the portal refused, or because one of our own windows took the pointer instead. From three metres those are one picture, and *a control that silently does nothing is the only failure the user cannot diagnose* is the rule this whole product is built on. So the launcher says so: a colourless card, top right, in for 3.5 s and out again.
+
+**It is a system rather than a message.** `@shared/notify.ts` holds the copy table, the constants and `stepNotices`, a pure fold over the whole life of a notice — appear, hold, leave, go — for the same reason `stepPad`, `stepChord` and `stepHandback` are pure: the suite has no DOM and no Electron. `src/main/notify.ts` owns one queue, one id counter and **one** timer, rescheduled from the earliest deadline the fold hands back. Adding a second thing the launcher announces is a row in `Announcement` and a row in that table, not a channel and not a component — which is what the second thing turned out to be.
+
+**Nothing here may take down its caller.** `notify()` is reached from inside a D-Bus signal handler and from an `fs.watch` settle, so a throw in `paint()` would break the BlueZ mirror the Devices screen depends on, or end the main process from a timer. The launcher falling over because it could not draw a card about a headset is the wrong way round, so that one function catches and logs loudly.
+
+`notice:show` carries the **whole live list**, including each card's `leaving` flag, because the surfaces hold no timers of their own. That is not tidiness: the same stack has to be drawable in two different windows, and a component holding its own clock cannot be handed a notice halfway through its life.
+
+### Which surface draws it
+
+`src/main/screen.ts` already owns the deciding fact, so `notify.ts` reads it rather than inventing a second answer. Whichever surface is not chosen is pushed an **empty list** — a notice routed to the launcher and then buried by a game would otherwise stay painted on a window nobody can see and reappear whole when the game ends.
+
+| The launcher is | Drawn by |
+| --- | --- |
+| the thing on screen | its own renderer, `NoticeStack` in `App.tsx` |
+| `handedOff` or minimised — a game, the sign-in window, the desktop | the overlay window |
+
+**That table is the cross-desktop story.** The common case creates no window, touches no compositor and behaves identically everywhere. Only the second row depends on the machine, and it is the row pointer mode exists for.
+
+### The overlay window, and the two protocols
+
+**The branch is on the session protocol, never on the desktop.** `desktop.ts`'s rule stands and nothing here reads `DESKTOP.id`. What it reads is `DESKTOP.session`, which is a different axis and a real difference in what a client is allowed to do — the same one `restoreLauncher` already writes "X11 only" against.
+
+| | X11 — Xfce, MATE, LXQt, Cinnamon, Openbox, GNOME and KDE on Xorg | Wayland — KDE, GNOME, sway, Hyprland |
+| --- | --- | --- |
+| Place your own window | yes, EWMH | **no.** `0,0` is a fiction |
+| Order yourself above | yes, `_NET_WM_STATE_ABOVE` | **no.** `setAlwaysOnTop` is a no-op |
+| Say "I am a notification" | yes, `_NET_WM_WINDOW_TYPE_NOTIFICATION` | nothing equivalent |
+| So the window is | small, placed at the work area's top-right | screen-sized, `fullscreen: true` |
+
+Common to both: frameless, transparent, `skipTaskbar`, `focusable: false`, `screen-saver` always-on-top, and `setIgnoreMouseEvents(true)` — the last being the OS-level half of click-through, which CSS `pointer-events: none` does not reach. A surface that swallowed a click over a game would break the very cursor the first notice announces.
+
+On **X11** that combination is a solved problem: `_NET_WM_WINDOW_TYPE_NOTIFICATION` is above, never focused and out of the taskbar on every EWMH window manager, so most of the desktops in the left column get this with no focus cost at all — and without a second fullscreen surface breaking the compositor's unredirection of a fullscreen game. `noticeBounds` is pure and tested, and it measures from the **work area** rather than the display: a corner measured from the output puts the card under a top panel, which is the mistake the compose keyboard already paid for at the other edge of the screen.
+
+On **Wayland** the window is the compose keyboard's shape for the reasons written down there — a client cannot place itself, and `xdg_toplevel.set_fullscreen` is the only request that maps a surface onto one whole output at a known origin. The stylesheet puts the card in the corner, which is the one layout authority that needs nobody's permission. `unknown` takes this route too, on which mistake is survivable: a fullscreen window is legal on X11 and merely wasteful, whereas a placed window on Wayland lands wherever the compositor felt like.
+
+### The focus cost, measured
+
+KDE Wayland **takes the focus**, which is what this repository already recorded twice about a window built this way, and what `focusable: false` and `showInactive()` do not prevent. Measured on Plasma 6 with the launcher fullscreen in front:
+
+```
+20:35:56.750  Launcher lost focus
+20:35:56.778  Notice overlay opened [wayland, fullscreen]: 2259x1271 at 0,0, zoom 1
+20:36:00.338  Launcher gained focus
+```
+
+3.58 s — the notice's life exactly — and the focus comes back on its own when the window hides, with no handback delay of the kind `compose.ts` needs. The visible cost is that KWin drops the window underneath out of the fullscreen layer for those three and a half seconds, so a panel reappears over it. That was fatal for a keyboard, whose entire job is to be somewhere a keystroke is not going; for a card that nothing depends on it is a blip, and it is accepted. The same measurement shows **no focus churn at all** while the launcher is drawing its own notices, which is the common case.
+
+GNOME may do the opposite and decline to raise the overlay at all, and sway and Hyprland stack a fullscreen surface by their own rules. **All of it degrades to "no notice."** Nothing waits on one, nothing is gated by one, and it cannot take the pad or the cursor away — which is what makes it acceptable to ship one window across compositors that cannot all be tested here, and the property to preserve if this grows.
+
+### What gets announced, and who saw it
+
+Two things so far, and the second needed two watchers because no single one sees all of it.
+
+**Pointer mode** comes off the chord, from `pointer/index.ts` — the one file that sees both backends, which is also where the cross-stop between them lives.
+
+**A device arriving or leaving** is the other, and the split is the interesting part:
+
+| | Sees | Watched by |
+| --- | --- | --- |
+| Controllers, over **every** transport | a `js*` node appearing in `/dev/input` | `src/main/inputWatch.ts` |
+| Everything else Bluetooth — headsets, keyboards, mice | `Device1.Connected` moving | `src/main/bluetooth/index.ts` |
+
+**`inputWatch.ts` is not `pointer/evdev.ts`, and must not become it.** That module follows the same directory and it keeps its one-consumer rule: it *opens* devices and reads a live pad while a game is on screen, and it only runs at all while the desktop-cursor setting is on. This one opens nothing — it watches `/dev/input`, which is devtmpfs and where inotify is reliable, and reads the *names* out of `/sys/class/input` through `padProfile.ts`, which is the half that survives a sandbox with `--device=all` revoked. It is the same split CONTRIBUTING.md already describes, with the watch on one side and the reading on the other.
+
+Two details are pinned by tests because both are silent when wrong. One controller creates several nodes a few milliseconds apart, so every event schedules **one settle** and the settle diffs the whole list — three nodes must be one card. And a device's identity is its node **and** its name: joydev hands a freed minor to the next device, so a pad swapped for another inside one settle window leaves `js0` present throughout and a node-keyed diff would report that nothing happened.
+
+**BlueZ skips controllers**, because `inputWatch` already has them and has them over USB too; leaving them in means one pad producing two cards a second apart. Its own transitions come from the mirror it already keeps — `connectedDevices` is a much cheaper read than `buildSnapshot` because it runs after *every* signal, and during a scan those arrive several a second as RSSI moves.
+
+**Both are seeded, not announced.** A headset already connected and a pad already switched on when the launcher starts have not arrived, and a card for each of them at every boot is the fastest way to teach somebody to ignore the corner of the screen.
+
+**And this is why BlueZ is armed at startup now.** It used to open on the first request from the Devices screen, on the argument that a launcher nobody had taken there should hold no system-bus connection — see `bluetooth/index.ts`, where that argument is now written out against its replacement. A watch that runs only while somebody is looking at the Devices screen is a watch for the one moment nobody needs it. What did *not* change is the part that mattered most: the pairing agent is still registered around a single pairing and unregistered in a `finally`, so the launcher never becomes the desktop's default answer to an incoming pairing.
+
+The floor everywhere here is the same as the overlay's: a machine with no radio, no daemon, or no readable `/dev/input` loses the cards and nothing else. Each failure writes one line and stops.
+
+### The card
+
+Colourless, by the rule the rest of the shell follows: `LaunchNotice` is the model, and the state is told apart by a Lucide icon and `text-foreground` weight rather than a hue. Not focusable, so it stays out of `SpatialFocus` entirely — nothing on it is a control, there is no scope to activate and nothing to hand focus back to, which is also why it auto-dismisses instead of carrying a dismiss button. And `pointer-events-none`, so an injected click passes through it to whatever it is floating over.
+
+**A device wears the same glyph coming and going**, and the title carries the direction. The glyph's job on those cards is *which kind of thing*, which does not change when a headset switches off — and Lucide has an "off" variant for some of these and not others, so half the pairs would fall back to something generic and the set would say a different kind of thing depending on what you unplugged. The pointer pair is the exception, because there is no name on those cards to read: there the glyph **is** the state.
+
+The kind vocabulary is one list, in `@shared/notify` as `DeviceKind`, with `BluetoothKind` an alias of it. It was the Devices screen's, and it turned out to be the right ten words for a card about a controller that arrived over USB.
+
+`NoticeStack.tsx` is rendered by **both** surfaces — the launcher's `App.tsx` and `src/renderer/notify.tsx`, the third renderer entry. That is why the overlay reuses `preload/index.cjs` rather than growing a fourth preload: one bridge method, one component, so a card cannot come to look different depending on whether a game happened to be running. It is also one fewer chance to trip `oneFilePerPreload`, which is the standing risk on that side.
 
 ## Where shadcn/ui fits
 
@@ -496,6 +638,8 @@ The screenshot viewer (`ScreenshotViewer.tsx`) is the **one** exception, and onl
 
 **There is no top bar.** Above the footer the screen belongs to cover art, starting at the first pixel — a TV renders a picture better than it renders chrome. All of the launcher's own state lives in one strip along the bottom: `StatusFooter.tsx` carries the button legend on the left and connection state (`ready` / `absent` / `handoff` / `failed`) plus both version numbers on the right, with `LoadingBar` as a 2px hairline directly above it and `LaunchNotice` above that. The GFN client version is unlabelled because it hangs off the `GFN CLIENT …` line and reads as part of it; the launcher's own is labelled `LAUNCHER v…` and sits last, since two versions in one strip have to say which program each belongs to and this is what a bug report asks for first. It comes off `UpdateStatus.currentVersion` rather than a channel of its own — see the update section for why main answers that whether or not the check may touch the network — so it appears a moment after the rest of the footer and the item is simply absent until then. This replaced an animated `SignalTrace` across the top; something new competing for attention up there should be cut rather than escalated.
 
+**The one thing allowed above that strip is a notice, and only for three and a half seconds.** `NoticeStack` is top-right and transient, which is the exception that proves the rule rather than a second place for state to live: it covers cover art, so it has to leave, and it is the only surface in the launcher that also has to be drawable over somebody else's fullscreen window. See [Notices](#notices) — and note that it obeys the same three rules `LaunchNotice` does.
+
 **`LaunchNotice` is where a failed launch goes, and it obeys all three rules at once.** Bottom-anchored, so it never covers artwork; **colourless**, distinguished by a `TriangleAlert` and `text-foreground` weight rather than a hue, because `--status-*` belongs to the status screen and the accent belongs to focus; and **not focusable**, so it stays out of `SpatialFocus` entirely — nothing on it is a control, there is no scope to activate and no focus to hand back, which is also why it auto-dismisses instead of carrying a dismiss button. It shows a sentence from `launchFailureReason` plus the failing argv, because "spawn flatpak ENOENT" names the fault exactly and explains nothing to somebody on a sofa. Before it existed a failed launch only reached `console.error`, and the footer went on saying `HANDING OFF` for the full 2500 ms — the launcher's own worst-case failure, a control that silently does nothing.
 
 Tokens live in `src/renderer/src/styles/globals.css`. Use the semantic ones (`bg-background`, `text-muted-foreground`, `border-border`, `bg-primary`) — a literal colour in a component is a colour the accent switch cannot reach.
@@ -515,6 +659,8 @@ On Linux `shell.openExternal` is `xdg-open`, which on a machine with no register
 ## Power
 
 The launcher is the last thing on screen before the TV goes off, so it can end the session: nav rail → Power → Back to desktop / Sleep / Restart / Turn off. `src/main/power.ts` shells out to `systemctl <verb>` with `execFile` — the same three verbs every desktop environment calls, mediated by logind and polkit, needing no native D-Bus module (`npmRebuild: false` and `externalizeDepsPlugin` would make adding one a build-config problem). `buildPowerArgv` is pure so the argv is unit-tested without ever suspending the machine running the suite.
+
+**`loginctl` is tried second, and only when the first binary is not there.** It is not a synonym for `systemctl` — it is what elogind ships, which is how the same three verbs are reached on a distribution that has logind without systemd. Both end at `org.freedesktop.login1`, and the verbs are spelled identically, which is what lets the tool be the only variable and an action stay one word. The restraint is the design: **only a `missing` classification falls through.** A polkit refusal is a real answer, arrived at by asking the right service the right question, and retrying it through a second command would ask the same service the same thing, be refused identically, and report the second refusal — hiding which tool was used and doubling the wait in front of somebody who pressed a button.
 
 Nothing here is privileged, and the channel validates the action against the union before it becomes an argument to `systemctl`. A refusal comes back as an error the dialog shows: on a screen with no keyboard, a button that silently does nothing is the one failure nobody can diagnose.
 
@@ -549,6 +695,8 @@ The other half of that fix is that **the Settings toggle now applies immediately
 ### What is held, and why it is a mirror
 
 `GetManagedObjects` once, then `InterfacesAdded`, `InterfacesRemoved` and `PropertiesChanged` amend it. Everything the screen asks is answered from that mirror, which is what makes the poll free.
+
+**The connection opens at startup rather than at the first request, and it did not always.** [Notices](#notices) has the reason and the reasoning: something outside the Devices screen came to need the answer, and a watch that runs only while somebody is looking at that screen is a watch for the one moment nobody needs it. The mirror, the snapshot and every action are unchanged — the screen is simply already warm when it opens — and a machine with no daemon still fails once, logs it, and is left alone.
 
 Three things about the fold are pinned by `model.test.ts` because the obvious implementation gets them wrong:
 

@@ -12,6 +12,7 @@ import {
   keyboardScaleValue
 } from '@shared/theme'
 import type { Settings } from '@shared/types'
+import { notify } from '../notify'
 import { armDesktopPointer, type DesktopPointer } from './desktop'
 
 /**
@@ -124,6 +125,10 @@ function apply(contents: WebContents, label: string, command: PointerCommand): v
       // One line per transition, never per frame: this file is read a week
       // later by somebody working out why a cursor did or did not appear.
       console.info(`Pointer mode ${command.active ? 'on' : 'off'} in ${label}`)
+      // And one card on screen, for the person who cannot read the log. Both
+      // backends announce from this file because this is the one place that
+      // sees both of them — the same reason the cross-stop above lives here.
+      notify({ kind: command.active ? 'pointer-on' : 'pointer-off' })
       return
 
     case 'move':
@@ -350,6 +355,11 @@ export function armPointerMode(
       if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
         window.webContents.send(IPC.pointerMode, modeActive)
       }
+      // Unconditional, unlike the push above: the desktop backend's whole
+      // purpose is the cases where that window is behind a game or minimised,
+      // and those are exactly the ones the notice has to reach. Which surface
+      // draws it is `notify.ts`'s decision, not this one's.
+      notify({ kind: modeActive ? 'pointer-on' : 'pointer-off' })
     }
   })
 }

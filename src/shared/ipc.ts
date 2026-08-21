@@ -67,15 +67,16 @@ export const IPC = {
   updateApply: 'update:apply',
   updateRestart: 'update:restart',
   /**
-   * Main → renderer, the first of four. Everything else here is a request the
+   * Main → renderer, the first of six. Everything else here is a request the
    * renderer makes; this one is a byte count during a download nobody can
    * otherwise watch.
    *
-   * The four are `update:progress`, `app:screen`, `gfn:client` and
-   * `status:zone`, and each carries its own argument above for why the renderer
-   * cannot simply ask. That argument is the entry fee: there is no generic
-   * `on(channel, …)` on the bridge, so a channel is a hand-written passthrough
-   * in `preload/index.ts` and a declared method on `LauncherApi`.
+   * The six are `update:progress`, `app:screen`, `gfn:client`, `status:zone`,
+   * `pointer:mode` and `notice:show`, and each carries its own argument below
+   * for why the renderer cannot simply ask. That argument is the entry fee:
+   * there is no generic `on(channel, …)` on the bridge, so a channel is a
+   * hand-written passthrough in `preload/index.ts` and a declared method on
+   * `LauncherApi`.
    */
   updateProgress: 'update:progress',
   appQuit: 'app:quit',
@@ -159,6 +160,24 @@ export const IPC = {
    * exactly as it is.
    */
   pointerMode: 'pointer:mode',
+  /**
+   * Main → renderer: what is on the notice stack right now.
+   *
+   * **The sixth and last of the main → renderer channels**, and the argument
+   * for it is not only that it passes the test the other five set — the
+   * renderer cannot ask, because the first thing this announces is a chord read
+   * off `/dev/input/js*` in main. It is that this is the *generic* one. Every
+   * push above carries a single fact and exists because that fact had nowhere
+   * else to go; the next thing the launcher decides on its own and has to say
+   * out loud rides this instead of becoming a seventh channel.
+   *
+   * The payload is the whole live list rather than one notice, because main
+   * owns the queue and the surfaces hold no timers — see `@shared/notify`. That
+   * is also what lets main move the stack between the launcher's own window and
+   * the overlay that draws over a game: each surface is told what it should be
+   * showing, and the one that should be showing nothing is told that too.
+   */
+  notice: 'notice:show',
   /**
    * The composed keyboard, both ways.
    *

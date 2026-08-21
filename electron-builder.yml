@@ -39,10 +39,45 @@ linux:
   target:
     - AppImage
     - deb
-  category: Game
+  # Both categories, and they have to be set *here*. `linux.desktop.entry` is
+  # merged into the generated entry first and then `Categories` is overwritten
+  # from this field unconditionally — app-builder-lib's LinuxTargetHelper does
+  # the assignment after the merge — so a `Categories:` under `entry` below is
+  # silently dropped, which is what happened for four releases and left the deb
+  # and the AppImage filed under Game alone. GNOME Software and Discover both
+  # place an application from this string.
+  category: Game;Network
   synopsis: Gamepad-driven couch launcher for NVIDIA GeForce NOW
   desktop:
     entry:
       Name: GFN Launcher
-      Categories: Game;Network;
+      # **Load-bearing, and it was missing from these two builds.** The session
+      # only mints a startup id — an `XDG_ACTIVATION_TOKEN` under Wayland — for
+      # an entry that asks for one, and Chromium consumes that token to activate
+      # its first window. Without it a Wayland toplevel cannot activate itself
+      # and the compositor's focus-stealing prevention is entitled to decline,
+      # which leaves the launcher on screen, unfocused, holding no display wake
+      # lock, at the front of a fresh session with no keyboard in the room.
+      #
+      # The Flatpak's hand-written entry has always carried it and so does the
+      # autostart entry `src/main/autostart.ts` writes; only the entry
+      # electron-builder generates did not, so the menu-launched deb and
+      # AppImage were the two ways in that lacked it. Nothing in the default
+      # `desktopMeta` supplies it — see ARCHITECTURE.md, "Autostart".
+      StartupNotify: 'true'
+deb:
+  # The AppStream metainfo, at an absolute path, which is fpm's `source=dest`
+  # operand and the only route electron-builder leaves open for a file outside
+  # the app directory.
+  #
+  # Without it a software centre has the .desktop entry and nothing else: no
+  # summary, no screenshots, no release notes, no branding colours — all of
+  # which the Flatpak has had since the first release from the same file. The
+  # `<launchable type="desktop-id">` inside it already names
+  # `io.github.robertotucci.GfnLauncher.desktop`, which is what `desktopName`
+  # and `syncDesktopName` make electron-builder call the generated entry, so the
+  # two match with nothing further to keep in step.
+  fpm:
+    - >-
+      flatpak/io.github.robertotucci.GfnLauncher.metainfo.xml=/usr/share/metainfo/io.github.robertotucci.GfnLauncher.metainfo.xml
 npmRebuild: false

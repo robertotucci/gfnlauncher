@@ -301,6 +301,65 @@ function readDevice(
   }
 }
 
+/** One device whose link is up, as much of it as a sentence needs. */
+export interface ConnectedDevice {
+  readonly address: string
+  readonly name: string
+  readonly kind: BluetoothKind
+}
+
+/**
+ * Everything BlueZ currently considers connected, keyed by address.
+ *
+ * A separate, much cheaper read than `buildSnapshot`: this runs after **every**
+ * signal, and during a scan those arrive several a second as RSSI moves. It
+ * allocates one entry per connected device — usually none or one — and does no
+ * sorting, no partitioning and no battery lookup.
+ */
+export function connectedDevices(tree: BluezTree): Map<string, ConnectedDevice> {
+  const connected = new Map<string, ConnectedDevice>()
+
+  for (const interfaces of tree.values()) {
+    const device = interfaces[DEVICE_IFACE]
+    if (!device || !bool(device, 'Connected')) continue
+
+    const address = str(device, 'Address')
+    if (!address) continue
+
+    connected.set(address, {
+      address,
+      // The same order `readDevice` uses, and for the same reason: `Alias` is
+      // what the user renamed it to and what BlueZ shows everywhere else.
+      name: str(device, 'Alias') ?? str(device, 'Name') ?? 'Unnamed device',
+      kind: deviceKind(device['Icon'], device['Class'])
+    })
+  }
+
+  return connected
+}
+
+/**
+ * Which links came up and which went down between two readings.
+ *
+ * Pure and exported so the transitions are assertable without a radio. Keyed on
+ * the address, which is the one thing about a Bluetooth device that does not
+ * change — a rename mid-session is the same device, not a departure and an
+ * arrival, and `left` therefore carries the name it had when it was last seen
+ * because by then BlueZ may have dropped the object entirely.
+ */
+export function connectionChanges(
+  before: ReadonlyMap<string, ConnectedDevice>,
+  after: ReadonlyMap<string, ConnectedDevice>
+): { connected: ConnectedDevice[]; disconnected: ConnectedDevice[] } {
+  const connected: ConnectedDevice[] = []
+  const disconnected: ConnectedDevice[] = []
+
+  for (const [address, device] of after) if (!before.has(address)) connected.push(device)
+  for (const [address, device] of before) if (!after.has(address)) disconnected.push(device)
+
+  return { connected, disconnected }
+}
+
 /** Lowercased rather than `localeCompare`d, so the order is the same everywhere. */
 function byName(a: BluetoothDevice, b: BluetoothDevice): number {
   const left = a.name.toLowerCase()

@@ -281,20 +281,23 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
   /**
    * LB + RB asks for a keyboard, and out here there are two answers.
    *
-   * **The compositor's, if it will.** Ours is drawn by a preload into a page we
-   * own and cannot follow the cursor out here: an Electron window created the
-   * only way an overlay could be — `focusable: false`, `alwaysOnTop`,
-   * `showInactive()` — takes the focus, and the focus is what decides where a
-   * keystroke lands. KWin's keyboard is a layer-shell surface and has no such
-   * problem, so it is asked first and the pad types on it with the cursor it
-   * already has.
+   * **The desktop's, if it has one it will show.** Ours is drawn by a preload
+   * into a page we own and cannot follow the cursor out here: an Electron window
+   * created the only way an overlay could be — `focusable: false`,
+   * `alwaysOnTop`, `showInactive()` — takes the focus, and the focus is what
+   * decides where a keystroke lands. A compositor's own keyboard is a
+   * layer-shell surface and has no such problem, so it is asked first and the
+   * pad types on it with the cursor it already has.
    *
-   * **Ours, composed, if it will not.** KWin declines more often than not: it
-   * raises its keyboard for touch, so `willShowOnActive` is false on any machine
-   * without a touchscreen however loudly `forceActivate` is called. Then the
-   * launcher stops trying to draw and type at the same time — `compose.ts` takes
-   * the focus deliberately, collects the whole string, gets out of the way and
-   * only then sends it. Same chord, same keyboard layout, one fewer promise.
+   * **Ours, composed, if it will not** — which is nearly always, and on most
+   * desktops is *always*. KDE is the only one that can even be asked, and it
+   * declines more often than not: it raises its keyboard for touch, so
+   * `willShowOnActive` is false on any machine without a touchscreen however
+   * loudly `forceActivate` is called. Everywhere else there is no protocol to
+   * ask with. Then the launcher stops trying to draw and type at the same time —
+   * `compose.ts` takes the focus deliberately, collects the whole string, gets
+   * out of the way and only then sends it. Same chord, same keyboard layout,
+   * one fewer promise.
    *
    * Fire and forget, because this is called from inside a 60 Hz tick and nothing
    * there may await. `toggleSystemKeyboard` never rejects.
@@ -315,7 +318,7 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       if (result.kind !== 'unavailable') {
         keyboardPending = false
         keyboardShown = result.kind === 'shown'
-        console.info(`On-screen keyboard ${keyboardShown ? 'shown' : 'hidden'} by KWin`)
+        console.info(`On-screen keyboard ${keyboardShown ? 'shown' : 'hidden'} by the desktop`)
         return
       }
 
@@ -325,11 +328,12 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       // not the thing that was asked for and the difference is worth recording.
       if (!saidNoKeyboard) {
         saidNoKeyboard = true
-        console.info(`KWin will not show its keyboard, composing instead. ${result.reason}`)
+        console.info(`No system on-screen keyboard, composing instead. ${result.reason}`)
       }
 
-      // The layout first, because it decides what the keyboard *is*. One D-Bus
-      // round trip, and a failure resolves to null rather than throwing, so the
+      // The layout first, because it decides what the keyboard *is*. A chain of
+      // sources, asked in the order `layoutSources` gives for this desktop, and
+      // every failure in it resolves to null rather than throwing, so the
       // keyboard opens either way.
       //
       // `keyboardPending` deliberately stays set across *this* round trip too,
@@ -337,7 +341,19 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
       // and the window, and clearing after the first one left a gap in which a
       // second chord opened a second keyboard — losing the first one's window
       // handle, and with it any way to close it.
-      void readSystemLayout().then(openCompose)
+      void readSystemLayout().then((layout) => {
+        // Which source answered, not only what it said. A keyboard in the wrong
+        // layout is the one fault here that looks like a broken keyboard rather
+        // than a wrong setting, and until this line existed nothing recorded
+        // which of the four places had been consulted. `the locale` is the
+        // caller's own fallback in `compose.ts`, and naming it is what
+        // distinguishes "your desktop told us nothing" from "we asked wrong".
+        console.info(
+          `Keyboard layout: ${layout?.id ?? 'unknown'} ` +
+            `(from ${layout?.source ?? 'nowhere — falling back to the locale'})`
+        )
+        openCompose(layout?.id ?? null)
+      })
     })
   }
 

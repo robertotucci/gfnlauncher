@@ -40,7 +40,10 @@ body:
     id: system
     attributes:
       label: Distribution and session
-      description: e.g. Fedora 42, KDE Plasma, Wayland
+      description: >-
+        Any desktop, and the answer matters — e.g. Fedora 42, GNOME, Wayland;
+        Arch, KDE Plasma, Wayland; Debian 13, Xfce, X11. The launcher writes all
+        three on the second line of its log.
       placeholder: distro, desktop, Wayland or X11
     validations:
       required: true

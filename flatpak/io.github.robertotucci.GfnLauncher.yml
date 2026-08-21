@@ -110,16 +110,47 @@ finish-args:
   # on-screen keyboard is drawn by a preload into a page we own, so it cannot
   # follow the cursor onto the desktop or into a game — an Electron overlay was
   # measured on KDE Wayland and takes the focus, which is exactly what decides
-  # where a keystroke lands. KWin's keyboard is a layer-shell surface and does
-  # not, so the request is forwarded to it: one property read, one
-  # `forceActivate`, and the pad clicks its keys with the cursor it already has.
+  # where a keystroke lands. A compositor's own keyboard is a layer-shell
+  # surface and does not, so the request is forwarded to it: one property read,
+  # one `forceActivate`, and the pad clicks its keys with the cursor it already
+  # has.
   #
-  # KDE-only, and deliberately not fatal anywhere else. `available` comes back
-  # false on a session without a virtual keyboard and the name is simply absent
-  # on a compositor that is not KWin; both end at the same place, one line in
-  # the log naming the package to install. Revoking it looks like the latter and
+  # **KDE is the only desktop that can be asked**, because there is no
+  # cross-desktop protocol for "show the on-screen keyboard": GNOME has one and
+  # raises it for touch input with no way to request it, and every other desktop
+  # has none at all. So this is one branch of a per-desktop question rather than
+  # the only answer, and the launcher resolves the desktop from
+  # `XDG_CURRENT_DESKTOP` — which flatpak does forward into the sandbox — before
+  # it opens a bus. Away from KDE it never makes this call, which is also what
+  # keeps a KDE-shaped error message off a GNOME user's screen.
+  #
+  # Not fatal on KDE either, and deliberately: `available` comes back false on a
+  # session without a virtual keyboard, and KDE declines to raise the one it has
+  # for anything but touch. Every one of those ends at the same place — the
+  # launcher composes the text in a window of its own — with one line in the log
+  # saying which. Revoking this permission looks like "KWin did not answer" and
   # the message says how to put it back.
   - --talk-name=org.kde.KWin
+
+  # ── Which keyboard the person actually has ──────────────────────────────────
+  # systemd-localed's `X11Layout`, read-only, and it decides what that composed
+  # keyboard *is* (src/main/pointer/systemKeyboard.ts, `readSystemLayout`).
+  #
+  # The layout is asked for in the order the session is most likely to know it:
+  # `XKB_DEFAULT_LAYOUT` from the environment, then the desktop's own setting —
+  # `org.kde.KeyboardLayouts` on KDE, `org.gnome.desktop.input-sources` through
+  # the host on the GNOME family — and then this, which is the only source that
+  # answers on Xfce, MATE, LXQt, a bare compositor and any X11 session alike.
+  # Without it those desktops fall through to the session *language*, and a
+  # language is not a layout: an English desktop on an Italian keyboard would be
+  # drawn a US board, and the thing being typed on it is a password.
+  #
+  # Nothing here is privileged — localed needs polkit for `Set*` and for nothing
+  # else, and this only ever reads a property. Revoking it costs a keyboard
+  # layout and never the keyboard: the call answers `ServiceUnknown`, the chain
+  # moves on to the locale, and the launcher writes one line saying where the
+  # layout came from.
+  - --system-talk-name=org.freedesktop.locale1
 
   # ── Pairing a Bluetooth device ──────────────────────────────────────────────
   # BlueZ (src/main/bluetooth/), and the only name this application needs on the

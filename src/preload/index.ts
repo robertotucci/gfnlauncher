@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { BluetoothAction } from '@shared/bluetooth'
 import type { ScreenOwnership } from '@shared/input'
+import type { Notice } from '@shared/notify'
 import type {
   GfnClientInfo,
   LaunchRequest,
@@ -87,7 +88,7 @@ const api: LauncherApi = {
      * The shape every subscription on this bridge is written in, and the reason
      * they are written out rather than exposed as a generic `on(channel, …)`:
      * the same rule that keeps `invoke` off this object applies in reverse. The
-     * renderer can listen to the four channels named here and to nothing else.
+     * renderer can listen to the six channels named here and to nothing else.
      *
      * The listener is handed the payload alone. `IpcRendererEvent` carries a
      * `sender`, and a live `ipcRenderer` handle reaching the renderer would
@@ -122,12 +123,32 @@ const api: LauncherApi = {
         ipcRenderer.off(IPC.appScreen, forward)
       }
     },
-    /** The fifth, and the last one this bridge should grow. Same shape. */
+    /** The fifth. Same shape. */
     onPointerMode: (listener: (active: boolean) => void) => {
       const forward = (_event: unknown, active: boolean): void => listener(active)
       ipcRenderer.on(IPC.pointerMode, forward)
       return () => {
         ipcRenderer.off(IPC.pointerMode, forward)
+      }
+    },
+    /**
+     * The sixth, and the last one this bridge should grow — this time because
+     * it is the one that makes a seventh unnecessary rather than merely
+     * unwelcome. Every other push here carries a single fact that had nowhere
+     * else to go; this one is a *surface*, so the next thing main decides on
+     * its own and has to say out loud is a `NoticeKind` rather than a channel.
+     *
+     * Same shape as the five above, and note that this preload is mounted on
+     * two windows now: the launcher and the notice overlay. Both subscribe
+     * through this method and render the same component, which is the whole
+     * reason the overlay reuses this bridge instead of growing a fourth
+     * preload — see `src/main/notify.ts`.
+     */
+    onNotice: (listener: (notices: Notice[]) => void) => {
+      const forward = (_event: unknown, notices: Notice[]): void => listener(notices)
+      ipcRenderer.on(IPC.notice, forward)
+      return () => {
+        ipcRenderer.off(IPC.notice, forward)
       }
     }
   }

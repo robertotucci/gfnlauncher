@@ -2,12 +2,15 @@ import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icons/512x512.png?asset'
-import { disarmBluetooth } from './bluetooth'
+import { armBluetoothWatch, disarmBluetooth } from './bluetooth'
 import { armClientWatch, disarmClientWatch } from './clientWatch'
+import { DESKTOP } from './desktop'
 import { disarmHandback } from './gfn/handback'
 import { FLATPAK_ID, IS_SANDBOXED } from './host'
+import { armInputWatch, disarmInputWatch } from './inputWatch'
 import { registerIpcHandlers } from './ipc'
 import { initLogging, writeLogLine } from './log'
+import { armNotices, disarmNotices, notify } from './notify'
 import { reportPadAccess } from './padAccess'
 import { armPointerMode, disarmPointerMode } from './pointer'
 import { getSettings, updateSettings } from './settings'
@@ -100,6 +103,29 @@ function start(): void {
       }
     )
 
+    // Beside the pointer reader, and for the same reason: the first thing this
+    // announces is that reader's chord, and the cases it serves are the ones
+    // where the launcher's own window is behind a game or minimised. The thunk
+    // is the same arrangement again — it pushes to whichever window exists when
+    // it has something to say.
+    armNotices(() => mainWindow)
+
+    // The two things that can arrive and leave while nobody is looking at the
+    // launcher. Both are watches rather than polls, both are seeded from what
+    // is already there so a boot announces nothing, and both degrade to no card
+    // rather than to an error: `inputWatch` opens no device and reads the
+    // controllers out of `/sys`, and `armBluetoothWatch` is one system-bus
+    // connection that fails once and quietly on a machine with no radio.
+    armInputWatch((change) => {
+      for (const device of change.arrived) {
+        notify({ kind: 'device-connected', name: device.name, device: 'gamepad' })
+      }
+      for (const device of change.left) {
+        notify({ kind: 'device-disconnected', name: device.name, device: 'gamepad' })
+      }
+    })
+    armBluetoothWatch()
+
     await createWindow()
 
     app.on('activate', () => {
@@ -121,6 +147,15 @@ function start(): void {
     // Both have to go back explicitly; the second one especially, because a
     // stray virtual pointer outliving the launcher is not our bug to notice.
     disarmPointerMode()
+    // Holds a timer and, once anything has been announced from behind a game,
+    // an always-on-top window. The second is the one that has to go explicitly:
+    // a transparent surface pinned above everything, outliving the launcher
+    // that owns it, is not a thing anybody can click their way out of.
+    disarmNotices()
+    // An inotify handle on /dev/input and a settle timer. Both are unref'd, so
+    // this is the same belt-to-braces as the two watches above rather than
+    // something holding the process open.
+    disarmInputWatch()
     // Same argument one bus over: a discovery reference this process still
     // holds is a radio the next application finds busy, and a pairing agent
     // left exported would go on answering for a launcher that is gone. A no-op
@@ -159,10 +194,16 @@ function announceStartup(): void {
       `packaged=${app.isPackaged} sandboxed=${IS_SANDBOXED} ` +
       `flatpakId=${FLATPAK_ID ?? 'none'} appImage=${process.env.APPIMAGE ? 'yes' : 'no'}`
   )
+  // The raw variables *and* what they were resolved to. Both, because they can
+  // disagree in the one way that matters: `Budgie:GNOME` is Budgie and
+  // `ubuntu:GNOME` is GNOME, so a report saying only `desktop=Budgie:GNOME`
+  // cannot say which sentence the launcher decided to use, and a report saying
+  // only `resolved=budgie` cannot say whether the detection was right.
   console.info(
     `Session: type=${process.env.XDG_SESSION_TYPE ?? 'unknown'} ` +
       `desktop=${process.env.XDG_CURRENT_DESKTOP ?? 'unknown'} ` +
       `wayland=${process.env.WAYLAND_DISPLAY ? 'yes' : 'no'} ` +
+      `resolved=${DESKTOP.id}/${DESKTOP.session} ` +
       `electron=${process.versions.electron} chrome=${process.versions.chrome} ` +
       `node=${process.versions.node}`
   )

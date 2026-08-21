@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPowerArgv, isPowerAction } from './power'
+import { POWER_TOOLS, buildPowerArgv, isPowerAction } from './power'
 
 // Argv only, never execution: a test that actually ran one of these would
 // suspend or reboot the machine running the suite.
@@ -10,9 +10,26 @@ describe('buildPowerArgv', () => {
     expect(buildPowerArgv('poweroff')).toEqual(['systemctl', 'poweroff'])
   })
 
+  it('defaults to systemctl, which is the one every desktop menu runs', () => {
+    // The fallback exists for elogind machines and must never be what a systemd
+    // one reaches for first.
+    expect(buildPowerArgv('poweroff')[0]).toBe('systemctl')
+    expect(POWER_TOOLS[0]).toBe('systemctl')
+  })
+
+  it('spells the verb the same for loginctl, which is why one word is enough', () => {
+    // elogind ships `loginctl` and no `systemctl`, and it takes these three
+    // verbs identically. If that ever stopped being true the fallback would
+    // need a per-tool verb table rather than a per-tool binary name.
+    expect(buildPowerArgv('suspend', 'loginctl')).toEqual(['loginctl', 'suspend'])
+    expect(buildPowerArgv('reboot', 'loginctl')).toEqual(['loginctl', 'reboot'])
+    expect(buildPowerArgv('poweroff', 'loginctl')).toEqual(['loginctl', 'poweroff'])
+  })
+
   it('passes the verb as an argument rather than building a shell string', () => {
     // execFile with an argv array, so nothing here is ever parsed by a shell.
     expect(buildPowerArgv('poweroff')).toHaveLength(2)
+    expect(buildPowerArgv('poweroff', 'loginctl')).toHaveLength(2)
   })
 })
 

@@ -24,6 +24,7 @@ import {
   cycleGenre,
   resolveLaunchTarget
 } from '@shared/games'
+import type { Notice } from '@shared/notify'
 import { accentValue, DEFAULT_ACCENT } from '@shared/theme'
 import type { BluetoothAction } from '@shared/bluetooth'
 import { useGamepad, useIntent } from '@/gamepad/GamepadProvider'
@@ -57,6 +58,7 @@ import {
   launchFailureReason,
   type LaunchNoticeState
 } from '@/components/LaunchNotice'
+import { NoticeStack } from '@/components/NoticeStack'
 import { cn } from '@/lib/utils'
 
 const ROOT_SCOPE = 'root'
@@ -206,6 +208,15 @@ export function App(): ReactNode {
   const launching = useRef(false)
   /** Why the last launch failed, or null. Cleared by the next press. */
   const [launchNotice, setLaunchNotice] = useState<LaunchNoticeState | null>(null)
+  /**
+   * The notice stack, owned by main and pushed here whole.
+   *
+   * Unrelated to `launchNotice` above despite the name: that one is a strip in
+   * the footer this component fills in and times out itself, and this is a
+   * queue main holds so the same cards can be drawn by the overlay window when
+   * the launcher is behind a game.
+   */
+  const [notices, setNotices] = useState<readonly Notice[]>([])
   const [refreshing, setRefreshing] = useState(false)
   /** Game ids of what was played last, newest first. Owned by main. */
   const [recentIds, setRecentIds] = useState<string[]>([])
@@ -1378,6 +1389,17 @@ export function App(): ReactNode {
   useEffect(() => window.launcher?.gfn.onClient(setClient), [])
 
   /**
+   * What the launcher has decided to say out loud, top right.
+   *
+   * The whole list arrives already ordered and already flagged `leaving`: main
+   * owns the queue and its timers, because the same stack has to be drawable in
+   * the overlay window that covers a running game — see `@shared/notify`. What
+   * lands here is an empty list whenever that other surface has it, so nothing
+   * stays painted on a window the user cannot see.
+   */
+  useEffect(() => window.launcher?.app.onNotice(setNotices), [])
+
+  /**
    * The datacenter moving, which happens in the GeForce NOW app rather than
    * here — so the launcher is behind the user when it does, and a Status screen
    * left open would otherwise keep naming the region they left.
@@ -1820,6 +1842,14 @@ export function App(): ReactNode {
           />
         )}
       </div>
+
+      {/*
+        Outside the app root above rather than inside it, and last of the three
+        bottom-strip siblings only because JSX has to put it somewhere: the
+        stack is `fixed` and `pointer-events-none`, so neither its position in
+        the flow nor the root's `pointer-events` gate reaches it.
+      */}
+      <NoticeStack notices={notices} />
 
       <LaunchNotice notice={launchNotice} />
 

@@ -44,6 +44,48 @@ describe('choosing a layout', () => {
     expect(composeLayoutFor('IT').id).toBe('it')
   })
 
+  it('takes the xkb name of every layout that ships', () => {
+    for (const definition of composeLayouts()) {
+      expect(composeLayoutFor(definition.id).id).toBe(definition.id)
+    }
+  })
+
+  it('reduces a locale to its language, which is right nearly everywhere', () => {
+    expect(composeLayoutFor('de_DE.UTF-8').id).toBe('de')
+    expect(composeLayoutFor('fr-FR').id).toBe('fr')
+    expect(composeLayoutFor('es_AR').id).toBe('es')
+  })
+
+  it('knows the UK layout is called gb, which no language reduction reaches', () => {
+    // `en_GB` reduces to `en`, which matches nothing and would land on US —
+    // where `"` and `@` are swapped, and those two are half of an email
+    // address typed into a password manager on a television.
+    expect(composeLayoutFor('en_GB').id).toBe('gb')
+    expect(composeLayoutFor('en-GB').id).toBe('gb')
+    expect(composeLayoutFor('en_IE').id).toBe('gb')
+    // And the other English locales stay on US, which is what they type on.
+    expect(composeLayoutFor('en_US').id).toBe('us')
+    expect(composeLayoutFor('en_AU').id).toBe('us')
+  })
+
+  it('does not hand AZERTY to Canada or QWERTY to Switzerland', () => {
+    // The two places the language is the wrong guess in the expensive
+    // direction: `fr_CA` types on QWERTY, so AZERTY would move every letter,
+    // and the Swiss locales all type on the same QWERTZ board.
+    expect(composeLayoutFor('fr_CA').id).toBe('us')
+    expect(composeLayoutFor('fr_CH').id).toBe('de')
+    expect(composeLayoutFor('de_CH').id).toBe('de')
+    expect(composeLayoutFor('it_CH').id).toBe('de')
+  })
+
+  it('prefers an exact xkb name over the locale table', () => {
+    // The chain is asked xkb-name first, and `readSystemLayout` answers with
+    // xkb names on four of its five legs. A layout the session actually named
+    // must never be overruled by a country guess.
+    expect(composeLayoutFor('gb').id).toBe('gb')
+    expect(composeLayoutFor('us').id).toBe('us')
+  })
+
   it('never returns nothing', () => {
     // A keyboard is not the place to fail closed: US QWERTY is wrong in a way
     // somebody can work around, and no keyboard is not.
@@ -58,19 +100,45 @@ describe('every layout that ships', () => {
     describe(definition.id, () => {
       const layout = buildComposeLayout(definition)
 
-      it('is QWERTY, in that order, on its second row', () => {
+      it('is the keyboard on the desk, not an alphabetical grid', () => {
         // The decision this file exists to hold: what gets typed here is an
         // email address and a password, and both are muscle memory attached to
-        // the keyboard already on the desk. The launcher's *own* search is
+        // the keyboard already there. The launcher's *own* search is
         // alphabetical for the opposite reason — read the header.
-        expect(composeRows(layout, 'default')[1]?.slice(0, 6)).toEqual([
-          'q',
-          'w',
-          'e',
-          'r',
-          't',
-          'y'
-        ])
+        //
+        // This used to assert `q w e r t y` literally, which was true while the
+        // only layouts that shipped were QWERTY ones and is false of QWERTZ and
+        // AZERTY — both of which satisfy the rule perfectly well. What the rule
+        // actually says is that the letters are in *the physical keyboard's*
+        // order, so what is asserted is that they are in no other one.
+        const letters = composeRows(layout, 'default')
+          .flat()
+          .filter((button) => /^[a-z]$/.test(button))
+        expect(letters).not.toEqual([...letters].sort())
+      })
+
+      it('carries all twenty-six letters, once each', () => {
+        // The transcription check. Every one of these rows was lifted out of a
+        // compiled keymap by hand, and a dropped or doubled letter is a keyboard
+        // that cannot type somebody's name — with nothing on screen to say so,
+        // because a missing key just is not there to press.
+        const letters = composeRows(layout, 'default')
+          .flat()
+          .filter((button) => /^[a-z]$/.test(button))
+        expect([...letters].sort().join('')).toBe('abcdefghijklmnopqrstuvwxyz')
+      })
+
+      it('has the same letters on the shifted layer, in the same places', () => {
+        // A layout whose two layers disagree about where `z` is would move the
+        // letter out from under a thumb the moment shift was pressed.
+        const lower = composeRows(layout, 'default')
+        const upper = composeRows(layout, 'shift')
+        for (const [r, row] of lower.entries()) {
+          for (const [c, button] of row.entries()) {
+            if (!/^[a-z]$/.test(button)) continue
+            expect(upper[r]?.[c]).toBe(button.toUpperCase())
+          }
+        }
       })
 
       it('can type every printable ASCII character', () => {

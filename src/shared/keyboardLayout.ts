@@ -47,10 +47,27 @@ export interface ComposeLayoutDefinition {
 /**
  * The layouts that ship.
  *
- * Two, and adding a third is adding an entry: the rows are the physical
- * keyboard's first two levels, straight off `/usr/share/X11/xkb/symbols/<id>`,
- * and everything else — the missing characters, the function row, the shape
- * checks — is worked out from them.
+ * Six, and adding a seventh is adding an entry: the rows are the physical
+ * keyboard's first two levels, and everything else — the missing characters,
+ * the function row, the shape checks — is worked out from them.
+ *
+ * **They are transcribed from the compiled keymap, not from the symbols file.**
+ * `/usr/share/X11/xkb/symbols/<id>` is a set of *overrides* on top of an
+ * include chain, so reading it gives the keys a layout changed and not the
+ * keyboard anybody has; `xkbcli compile-keymap --layout <id>` resolves the
+ * chain and is what these came out of. Note the row split that follows from
+ * that: `BKSL` is the key left of Enter on an ISO keyboard and above it on an
+ * ANSI one, so it ends row *three* on every layout here except `us`.
+ *
+ * **A dead key is drawn as the character it produces on its own.** German's
+ * `´`, French's `^` and `¨`, Spanish's `` ` `` and `´` are all dead keys on the
+ * real keyboard — press one and then a letter and they compose. This keyboard
+ * has no dead-key state and does not want one: it types a character straight at
+ * the compositor, so the key is drawn with, and produces, the spacing form,
+ * which is what pressing that key and then space gives on the physical board.
+ * The accented letters those keys would have composed are not lost — a layout
+ * that has them at levels one and two has them here too, and the rest are
+ * outside printable ASCII and so outside what a password field wants.
  */
 const LAYOUTS: readonly ComposeLayoutDefinition[] = [
   {
@@ -90,10 +107,122 @@ const LAYOUTS: readonly ComposeLayoutDefinition[] = [
         '> Z X C V B N M ; : _'
       ]
     }
+  },
+  {
+    id: 'de',
+    name: 'Deutsch',
+    rows: {
+      // QWERTZ: Y and Z are swapped, which is on its own the reason a German
+      // user cannot be handed the US board and told to manage.
+      default: [
+        '^ 1 2 3 4 5 6 7 8 9 0 ß ´',
+        'q w e r t z u i o p ü +',
+        'a s d f g h j k l ö ä #',
+        '< y x c v b n m , . -'
+      ],
+      shift: [
+        '° ! " § $ % & / ( ) = ? `',
+        'Q W E R T Z U I O P Ü *',
+        "A S D F G H J K L Ö Ä '",
+        '> Y X C V B N M ; : _'
+      ]
+    }
+  },
+  {
+    id: 'fr',
+    name: 'Français',
+    rows: {
+      // AZERTY, and the digits are on **shift** — the one thing about this
+      // layout that surprises everybody who has not used one, and the reason
+      // drawing it faithfully matters more here than anywhere else.
+      default: [
+        '² & é " \' ( - è _ ç à ) =',
+        'a z e r t y u i o p ^ $',
+        'q s d f g h j k l m ù *',
+        '< w x c v b n , ; : !'
+      ],
+      shift: [
+        '~ 1 2 3 4 5 6 7 8 9 0 ° +',
+        'A Z E R T Y U I O P ¨ £',
+        'Q S D F G H J K L M % µ',
+        '> W X C V B N ? . / §'
+      ]
+    }
+  },
+  {
+    id: 'es',
+    name: 'Español',
+    rows: {
+      default: [
+        "º 1 2 3 4 5 6 7 8 9 0 ' ¡",
+        'q w e r t y u i o p ` +',
+        'a s d f g h j k l ñ ´ ç',
+        '< z x c v b n m , . -'
+      ],
+      shift: [
+        'ª ! " · $ % & / ( ) = ? ¿',
+        'Q W E R T Y U I O P ^ *',
+        'A S D F G H J K L Ñ ¨ Ç',
+        '> Z X C V B N M ; : _'
+      ]
+    }
+  },
+  {
+    id: 'gb',
+    name: 'UK',
+    rows: {
+      // The only one of these besides US that needs no generated row: a UK
+      // keyboard reaches every printable ASCII character at levels one and two.
+      // It is still not the US layout — `"` and `@` are swapped, `#` is its own
+      // key and `\` is left of Z — and those three are exactly the characters
+      // an email address and a password are made of.
+      default: [
+        '` 1 2 3 4 5 6 7 8 9 0 - =',
+        'q w e r t y u i o p [ ]',
+        "a s d f g h j k l ; ' #",
+        '\\ z x c v b n m , . /'
+      ],
+      shift: [
+        '¬ ! " £ $ % ^ & * ( ) _ +',
+        'Q W E R T Y U I O P { }',
+        'A S D F G H J K L : @ ~',
+        '| Z X C V B N M < > ?'
+      ]
+    }
   }
 ]
 
 export const DEFAULT_LAYOUT_ID = 'us'
+
+/**
+ * Locales whose *language* is the wrong guess at their keyboard.
+ *
+ * Only consulted on the last leg — `readSystemLayout` asks the session four
+ * ways first, and this is what happens when every one of them said nothing. The
+ * rule the rest of the time is "the language is the layout", which holds for
+ * `it_IT`, `de_DE`, `fr_FR`, `es_ES` and most of the rest; these are the places
+ * it does not, and every one of them is a country that types on a keyboard
+ * belonging to a different language.
+ *
+ * `en_GB` is the one that would actually bite: xkb calls the UK layout `gb`, so
+ * the language reduction produces `en`, which matches nothing and lands on US —
+ * where `"` and `@` are swapped, which is half of an email address.
+ */
+const LOCALE_LAYOUTS: Readonly<Record<string, string>> = {
+  // Ireland ships the UK layout.
+  en_gb: 'gb',
+  en_ie: 'gb',
+  // Canadian French is QWERTY. Handing it AZERTY because the language is `fr`
+  // would move every letter on the board, which is far worse than US
+  // punctuation in the wrong place.
+  fr_ca: 'us',
+  // The three Swiss locales all type on the same QWERTZ keyboard, so German is
+  // the closest of the six — and for `fr_CH` it is the difference between
+  // QWERTZ and AZERTY, which is again every letter.
+  de_ch: 'de',
+  fr_ch: 'de',
+  it_ch: 'de'
+}
 
 /**
  * The layout for an xkb name or a locale, and never null.
@@ -107,9 +236,11 @@ export function composeLayoutFor(id: string | null | undefined): ComposeLayoutDe
   // `it-IT` and `it_IT` both mean `it`; the compositor says `it` and a locale
   // says the other two.
   const language = wanted.split(/[-_]/)[0] ?? ''
+  const locale = wanted.replace('-', '_')
 
   return (
     LAYOUTS.find((layout) => layout.id === wanted) ??
+    LAYOUTS.find((layout) => layout.id === LOCALE_LAYOUTS[locale]) ??
     LAYOUTS.find((layout) => layout.id === language) ??
     LAYOUTS.find((layout) => layout.id === DEFAULT_LAYOUT_ID)!
   )

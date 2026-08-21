@@ -98,15 +98,23 @@ export default defineConfig({
       // paint fast at session start should not parse unminified source.
       minify: 'esbuild',
       rollupOptions: {
-        // Two pages. `index` is the launcher; `compose` is the keyboard that
+        // Three pages, and a page not named here is a page that silently does
+        // not ship. `index` is the launcher; `compose` is the keyboard that
         // types into windows that are not ours — a page with no React, no
         // Tailwind and no state, because main drives it over the bridge. It is
         // a renderer entry rather than a third preload or a `data:` URL so that
         // `simple-keyboard` is bundled *into the application* and needs nothing
         // installed on the machine, which is the whole requirement.
+        //
+        // `notify` is the overlay that draws notices when the launcher's own
+        // window is not what is on screen. Unlike `compose` it *is* React and
+        // Tailwind, because it renders the launcher's own `NoticeStack` — one
+        // component, two surfaces, so a card cannot come to look different
+        // depending on whether a game was running when it appeared.
         input: {
           index: resolve('src/renderer/index.html'),
-          compose: resolve('src/renderer/compose.html')
+          compose: resolve('src/renderer/compose.html'),
+          notify: resolve('src/renderer/notify.html')
         }
       }
     }

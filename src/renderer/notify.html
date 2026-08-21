@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- The overlay that draws notices when the launcher's own window is not what
+     is on screen — behind a game, behind the sign-in window, or minimised. Main
+     decides which surface a notice goes to; see `src/main/notify.ts`.
+
+     `dark` for the same reason as the launcher: no light theme, and a class
+     rather than a media query so shadcn's `dark:` variants resolve against us. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>GFN Launcher notices</title>
+    <!-- Same policy as the launcher page. This window is pinned above
+         everything, including a running game, so it loads nothing it did not
+         ship with even more emphatically than the rest. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:"
+    />
+  </head>
+  <!-- `bg-transparent` is load-bearing rather than decoration: `globals.css`
+       paints `body { @apply bg-background }` in `@layer base`, and a utility
+       beats a base layer. Without it this window is an opaque rectangle over
+       whatever the user is doing. -->
+  <body class="bg-transparent">
+    <div id="root"></div>
+    <script type="module" src="/src/notify.tsx"></script>
+  </body>
+</html>

@@ -6,18 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
-## [Unreleased]
+## [0.1.4] - 2026-08-21
+
+### Added
+
+- **The launcher now works properly on GNOME and every other desktop, not only on KDE.** It was written and measured on KDE Plasma, and three things quietly assumed it. The on-screen keyboard it draws for you now types in **your keyboard's layout on any desktop** — it asks your session four ways, where before it only knew how to ask KDE and everywhere else fell back to guessing from your language, so an English desktop with a German keyboard got an American one. It no longer tells you to install a KDE package when you are not on KDE: it says which keyboard you are about to see, in your own desktop's name, and gets on with drawing it. And the menu entry the `.deb` and the AppImage install now asks the session for permission to come to the front, which it never did — without it a launcher started at login could come up behind everything, unable to keep the screen awake, on a machine with no keyboard.
+- **Four more keyboards: German, French, Spanish and UK**, beside the American and Italian ones already there. Each is the real thing — QWERTZ, AZERTY, `"` and `@` where a UK keyboard puts them — and every character that a national layout hides behind AltGr is still one press away on the extra row.
+- **The launcher now says when the pad's mouse goes on and off.** Holding L3 + R3 raises a cursor, and until now the only sign that it had worked was the cursor itself — which tells you nothing at all when there was no cursor, because the setting was off or your desktop refused the permission. A card now slides in at the top right naming what happened and the hold that undoes it, and gets out of the way after a few seconds. It is **visible while a game is streaming**, which is the case the cursor exists for and the one place the launcher could not previously show you anything: its own window is behind the stream, and so was everything it drew. On a desktop that cannot put a window over a fullscreen game the card is simply not shown; nothing else changes.
+- **And when a device connects or disconnects.** Switch a controller on and the launcher says so by name, over USB or Bluetooth; the same for a headset, a keyboard or anything else that arrives over Bluetooth. It is one card per device rather than one per kernel node, it says nothing at all for the hardware that was already on when the launcher started, and — like the notice above — it is visible over a running game, which is where "did that pad actually connect?" is hardest to answer.
+- **The Power menu works on distributions without systemd.** Suspend, restart and turn off fall back to `loginctl`, which elogind provides, when `systemctl` is not on the machine. A refusal is still shown to you unchanged; only a missing command is retried.
+- **Switch-style controllers are named correctly.** B confirms and A goes back, the way they do everywhere else on Linux, and the footer, the cursor hint and both on-screen keyboards now say so instead of saying A and B. The buttons themselves do not move: the one under your thumb still confirms, whichever controller you pick up.
+- **The on-screen keyboards name your own pad's buttons.** A PlayStation pad was told to press X for a space and Y to send, and it has neither; it now says □ and △, and the hint under the cursor says × and ○ rather than A and B.
+- **Settings → Controllers and Bluetooth lists the controllers that are connected**, with how each one is attached and whether the launcher had to guess at its buttons — the one fact that explains a pad behaving oddly, and until now it was only in the log file.
 
 ### Fixed
 
 - **Controllers that Linux has no translation table for now work properly.** Generic USB pads, several third-party PlayStation-shaped pads and some pads over some connections are handed to the launcher with their buttons in the order the *controller* declares them rather than in a standard order, and the launcher read them as if they were an Xbox pad. The d-pad did nothing, the wrong face buttons fired, the right stick scrolled on a trigger, and **☰ — the button that starts a game — was a stick click**. It now asks the system what each button on each pad actually is, which is the same question it already asked for the desktop cursor, and uses the answer everywhere: the grid, the cursor in the sign-in window, and both on-screen keyboards. A pad it still cannot place behaves exactly as it did before rather than worse, and the log says which one and why.
 - **A flight stick or a wheel plugged in beside the pad no longer presses buttons in the launcher.** Its trigger is the same number as a gamepad's A, so pulling it opened whatever the cursor was on, and a throttle resting off centre scrolled the page on its own. The launcher now recognises that such a device is not a controller and reads nothing from it.
-
-### Added
-
-- **Switch-style controllers are named correctly.** B confirms and A goes back, the way they do everywhere else on Linux, and the footer, the cursor hint and both on-screen keyboards now say so instead of saying A and B. The buttons themselves do not move: the one under your thumb still confirms, whichever controller you pick up.
-- **The on-screen keyboards name your own pad's buttons.** A PlayStation pad was told to press X for a space and Y to send, and it has neither; it now says □ and △, and the hint under the cursor says × and ○ rather than A and B.
-- **Settings → Controllers and Bluetooth lists the controllers that are connected**, with how each one is attached and whether the launcher had to guess at its buttons — the one fact that explains a pad behaving oddly, and until now it was only in the log file.
 
 ## [0.1.3] - 2026-08-20
 
@@ -109,6 +114,7 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
+[0.1.4]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.4
 [0.1.3]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.3
 [0.1.2]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.2
 [0.1.1]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.1

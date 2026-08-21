@@ -2,10 +2,13 @@ import type { BluetoothPairingRequest, BluetoothResult, BluetoothSnapshot } from
 import type { BluetoothAction } from '@shared/bluetooth'
 import { createPairingAgent, type PairingAgent } from './agent'
 import { errorName, errorText, openBluez, PAIR_TIMEOUT_MS, type BluezBus } from './bluez'
+import { notify } from '../notify'
 import {
   ADAPTER_IFACE,
   DEVICE_IFACE,
   buildSnapshot,
+  connectedDevices,
+  connectionChanges,
   describeBluezError,
   findAdapter,
   readDict,
@@ -14,7 +17,8 @@ import {
   withInterfaces,
   withoutInterfaces,
   withProperties,
-  type BluezTree
+  type BluezTree,
+  type ConnectedDevice
 } from './model'
 
 /**
@@ -27,9 +31,23 @@ import {
  * the Devices screen poll once a second without putting anything on the bus —
  * the same arrangement `status/index.ts` has with its cached board.
  *
- * Nothing here is armed at startup. The connection opens on the first request
- * and `disarmBluetooth()` closes it, so a launcher nobody has taken to the
- * Devices screen has no system-bus connection, no match rules and no agent.
+ * ── What is armed when, and why that changed ────────────────────────────────
+ *
+ * It used to be nothing: the connection opened on the first request from the
+ * Devices screen and `disarmBluetooth()` closed it. That stopped being possible
+ * when something outside the screen came to need the answer — the launcher now
+ * says out loud when a headset connects or a controller drops, and a watch that
+ * only runs while somebody is looking at the Devices screen is a watch for the
+ * one moment nobody needs it. `armBluetoothWatch()` opens the connection once
+ * at startup for exactly that.
+ *
+ * Three things keep the change small. The **agent is still registered only
+ * around a pairing** and unregistered in a `finally`, so the launcher does not
+ * become the desktop's default answer to incoming pairings — that argument is
+ * in `agent.ts` and is untouched. A machine with no bluetoothd fails **once**,
+ * logs it and is left alone, because the retry is still driven by requests.
+ * And nothing about the mirror, the snapshot or any of the actions moved: the
+ * screen still reads the same tree, it is simply already warm when it opens.
  */
 
 /** How long a scan runs before stopping itself. */
@@ -52,6 +70,8 @@ let opening: Promise<BluezBus> | null = null
 let failedAt = 0
 
 let tree: BluezTree = EMPTY_TREE
+/** The links that were up at the last signal, so a transition can be told. */
+let connected: ReadonlyMap<string, ConnectedDevice> = new Map()
 let scanning = false
 let scanTimer: NodeJS.Timeout | null = null
 let request: BluetoothPairingRequest | null = null
@@ -107,6 +127,10 @@ function forget(reason: string | null): void {
   bus = null
   agent = null
   tree = EMPTY_TREE
+  // Cleared rather than diffed against the empty tree: the bus going is not
+  // every device in the room switching off, and a row of "disconnected" cards
+  // for a connection *we* lost would be the launcher blaming the hardware.
+  connected = new Map()
   scanning = false
   if (scanTimer) clearTimeout(scanTimer)
   scanTimer = null
@@ -122,12 +146,15 @@ async function open(): Promise<BluezBus> {
   const connection = await openBluez({
     onInterfacesAdded: (path, interfaces) => {
       tree = withInterfaces(tree, path, readInterfaces(interfaces))
+      announce()
     },
     onInterfacesRemoved: (path, names) => {
       tree = withoutInterfaces(tree, path, names)
+      announce()
     },
     onPropertiesChanged: (path, iface, changed, invalidated) => {
       tree = withProperties(tree, path, iface, readDict(changed), invalidated)
+      announce()
     },
     onLost: (reason) => {
       console.warn(`Bluetooth: the system bus connection was lost (${reason}).`)
@@ -137,6 +164,10 @@ async function open(): Promise<BluezBus> {
 
   tree = readManagedObjects(await connection.getManagedObjects())
   error = null
+  // Seeded, not announced. A headset that was already on when the launcher
+  // started has not just connected, and a card for each of them at every boot
+  // is the fastest way to teach somebody to ignore the corner of the screen.
+  connected = connectedDevices(tree)
 
   const adapter = findAdapter(tree)
   const state = snapshot()
@@ -199,6 +230,50 @@ async function ensure(): Promise<BluezBus | null> {
     console.warn(`Bluetooth: could not reach BlueZ — ${error ?? 'no reason given'}`)
     return null
   }
+}
+
+/**
+ * A link coming up or going down, said out loud.
+ *
+ * Runs after every signal, which is why `connectedDevices` is the cheap read
+ * rather than `buildSnapshot`: during a scan these arrive several a second as
+ * RSSI moves, and all but a handful of them change nothing here.
+ *
+ * **Controllers are deliberately skipped.** `inputWatch.ts` announces those,
+ * and it sees them over every transport rather than only over Bluetooth — so
+ * leaving them in would mean one pad producing two cards a second apart, told
+ * apart by nothing the user can see. The grouping in `noticeContent` would
+ * usually collapse the pair anyway, since both watchers read the same name out
+ * of the same hardware; this is the half that does not depend on that holding.
+ */
+function announce(): void {
+  const now = connectedDevices(tree)
+  const change = connectionChanges(connected, now)
+  connected = now
+
+  for (const device of change.connected) {
+    if (device.kind === 'gamepad') continue
+    console.info(`Bluetooth: ${device.kind} connected`)
+    notify({ kind: 'device-connected', name: device.name, device: device.kind })
+  }
+
+  for (const device of change.disconnected) {
+    if (device.kind === 'gamepad') continue
+    console.info(`Bluetooth: ${device.kind} disconnected`)
+    notify({ kind: 'device-disconnected', name: device.name, device: device.kind })
+  }
+}
+
+/**
+ * Opens the connection at startup so the launcher can see a device arrive.
+ *
+ * Fire and forget, and a failure here is the ordinary case rather than a fault:
+ * plenty of machines have no radio and some have no daemon. `ensure()` already
+ * logs why and sets the cooldown, so nothing is retried on a timer — the next
+ * attempt is whenever somebody opens the Devices screen, exactly as before.
+ */
+export function armBluetoothWatch(): void {
+  void ensure()
 }
 
 // ── Reading ─────────────────────────────────────────────────────────────────
