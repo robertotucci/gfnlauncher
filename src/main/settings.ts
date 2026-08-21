@@ -50,6 +50,10 @@ function sanitise(raw: unknown): Settings {
     // and back out to disk on every write.
     dismissedUpdate:
       typeof input.dismissedUpdate === 'string' ? input.dismissedUpdate.slice(0, 64) : null,
+    clientFullscreen:
+      typeof input.clientFullscreen === 'boolean'
+        ? input.clientFullscreen
+        : DEFAULT_SETTINGS.clientFullscreen,
     pointerDesktop:
       typeof input.pointerDesktop === 'boolean'
         ? input.pointerDesktop

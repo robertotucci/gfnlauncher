@@ -365,6 +365,27 @@ export interface Settings {
    */
   dismissedUpdate: string | null
   /**
+   * Ask the compositor to make the GeForce NOW window fullscreen and borderless.
+   *
+   * A real preference, and on by default, because on by default is what the
+   * launcher is for: the client only takes the screen once a stream is running,
+   * and everything before that — its mall, the pre-launch dialog, the loading
+   * screen — is a decorated window with the desktop showing around it.
+   *
+   * It is a preference rather than a constant for one reason, and it is not
+   * taste: `gfn/present.ts` reaches outside this application to reshape another
+   * one's window, through a compositor script on KDE and `xdotool` elsewhere.
+   * Neither is a contract anybody has promised to keep. If a Plasma release
+   * renames a scripting signal or a window manager starts placing the window
+   * somewhere unhelpful, the person in front of it needs a way to say *stop
+   * doing that* without waiting for a release — which is exactly what
+   * `hideOnLaunch` was not, and why it was removed rather than defaulted off.
+   *
+   * Read at launch, so it takes effect on the next game rather than on the
+   * window that is already up.
+   */
+  clientFullscreen: boolean
+  /**
    * Let L3 + R3 raise a cursor outside the launcher's own windows.
    *
    * A real preference, and off by default, because it is the one feature here
@@ -404,6 +425,9 @@ export const DEFAULT_SETTINGS: Settings = {
   gfnLinked: false,
   updateCheck: true,
   dismissedUpdate: null,
+  // On: the decorated pre-stream window is the desktop showing through, and
+  // removing it is what "console-like" means here.
+  clientFullscreen: true,
   // Off: it costs a system permission dialog the first time it is used.
   pointerDesktop: false,
   pointerRestoreToken: null

@@ -90,7 +90,7 @@ All of these were hit while getting the first build green, and all of them fail 
 
 ## Conventions
 
-**Every constructed argv is a pure function with a test.** `buildPowerArgv`, `buildLaunchArgv`, `buildUrlRoute`, `buildOpenArgv`, `hostCommand`, `buildDesktopEntry`, `buildFlatpakUpdateArgv`, `buildFlatpakCommitArgv`. The reason is not purity for its own sake: these produce commands that suspend a machine, kill a process, write a file that runs at login, or replace the running application, and the test suite must be able to assert the exact string without ever executing it. When you add another one, follow the pattern.
+**Every constructed argv is a pure function with a test.** `buildPowerArgv`, `buildLaunchArgv`, `buildUrlRoute`, `buildOpenArgv`, `buildFullscreenArgv`, `hostCommand`, `buildDesktopEntry`, `buildFlatpakUpdateArgv`, `buildFlatpakCommitArgv` — and `buildKwinScript`, which is not an argv but is the same bargain: text this process generates for another one to execute. The reason is not purity for its own sake: these produce commands that suspend a machine, kill a process, write a file that runs at login, or replace the running application, and the test suite must be able to assert the exact string without ever executing it. When you add another one, follow the pattern.
 
 **Anything crossing the IPC bridge is validated on the main side.** `isPowerAction`, `isLaunchRequest`, `isAccentId`, `isScaleId`, `sanitise()`. The channel is where the renderer stops being ours, and an unvalidated payload becomes a `TypeError` that crosses as a rejected promise — the one result shape the renderer does not model.
 

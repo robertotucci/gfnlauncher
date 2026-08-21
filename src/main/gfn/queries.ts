@@ -106,11 +106,19 @@ mutation RemoveOwnedVariant($cmsId: String!, $locale: String!) {
 /**
  * Picks which store's edition a title launches from.
  *
- * Inferred from the documented "same shape" as the two above and **never
- * executed against the live API** — treat a failure here as expected rather
- * than exceptional, and do not persist a selection the server did not take.
- * The name says `owned`, so it may well refuse a variant the user has not been
- * marked as owning; that is why the panel offers "mark owned" beside it.
+ * Transcribed from the client bundle, like the two above — it sits in the same
+ * operation table, and the client calls it through
+ * `addPlatformPreference(variantId)`. What is unobserved is a *successful
+ * response* to it from here: treat a failure as expected rather than
+ * exceptional, and do not persist a selection the server did not take. The name
+ * says `owned`, and the client only ever calls it once ownership is
+ * established, so it may well refuse a variant the user has not been marked as
+ * owning; that is why the panel offers "mark owned" beside it.
+ *
+ * What it sets is the `selected` flag `pickLaunchVariant` reads. That decides
+ * which edition the launcher hands over — the deep link's `shortName` is what
+ * makes the client accept it rather than resolve one of its own. See
+ * `buildUrlRoute`.
  */
 export const SELECT_OWNED_VARIANT = `
 mutation SelectOwnedVariant($cmsId: String!, $locale: String!) {

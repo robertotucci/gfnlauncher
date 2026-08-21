@@ -115,6 +115,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.5" date="2026-08-22">
+      <description>
+        <p>Games open straight into the stream: the GeForce NOW window is fullscreen and frameless from the moment it appears, and titles sold on more than one store no longer stop to ask which one you bought them from.</p>
+        <ul>
+          <li>The GeForce NOW window is fullscreen and borderless from the instant it appears, so the whole sequence from pressing Play to the game itself has nothing on screen but GeForce NOW — through KWin on KDE, through xdotool elsewhere, and the game still launches as before where neither is available</li>
+          <li>Fixed: games sold on more than one store put up a store picker on every launch, even for a game you own and a store you had already chosen — 234 titles in the catalogue</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.5</url>
+    </release>
     <release version="0.1.4" date="2026-08-21">
       <description>
         <p>The launcher now works properly on every desktop rather than only on KDE, reads controllers Linux has no table for, and says out loud when the pad's mouse turns on or a device connects.</p>

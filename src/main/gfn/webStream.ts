@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { LaunchRequest, LaunchResult } from '@shared/types'
+import { launchShortName } from '@shared/games'
 import { POINTER_PRELOAD, registerPointerTarget } from '../pointer'
 import { getAuthSession } from './partition'
 
@@ -66,11 +67,20 @@ export function buildClientHints(version = chromeVersion()): Record<string, stri
  * bundle maps straight onto a telemetry dimension — it tags where a launch came
  * from and selects no behaviour. gfn-electron sends `GeForceNOW` because it
  * *is* the mall; we are not, so we say so.
+ *
+ * **`shortName` belongs here too**, contrary to what this path was long assumed
+ * to be able to do. The two routes differ in shape, not in vocabulary: the same
+ * parser reads `cmsId`, `launchSource`, `shortName`, `appLaunchMode`,
+ * `sdkClient`, `parentGameId` and `accountLinked` off either one, and feeds the
+ * same `StreamerModule`. So the web player can pin a store after all, by the
+ * same mechanism and for the same reason as the deep link — see
+ * `launchShortName`.
  */
 export function buildStreamerUrl(request: LaunchRequest): string {
   const params = new URLSearchParams()
   params.set('launchSource', 'External')
   params.set('cmsId', request.cmsId)
+  params.set('shortName', launchShortName(request))
 
   // The query rides inside the fragment: everything after `#` is the Angular
   // route, so this cannot be assembled with `URL.searchParams`.

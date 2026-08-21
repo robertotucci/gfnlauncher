@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [0.1.5] - 2026-08-22
+
+### Added
+
+- **Games now open fullscreen, with no window frame around them.** GeForce NOW only took the whole screen once a game was actually streaming — its menus, the pre-launch dialog and the loading screen came up in a window with a title bar across the top and the launcher showing around it, which is the one moment the desktop broke through. The launcher now asks the desktop to make that window fullscreen and borderless from the instant it appears, so the whole sequence from pressing Play to the game itself has nothing on screen but GeForce NOW. On KDE it does this through KWin and needs nothing installed; on other desktops it uses `xdotool` if it is there. Either way, if it cannot be done the game still launches exactly as before, with the frame it always had. There is a switch for it in Settings → GeForce NOW client, on by default.
+
+### Fixed
+
+- **Games sold on more than one store no longer stop to ask which one you bought them from.** Press Play on Battlefield 6 or Dishonored: Death of the Outsider and GeForce NOW put up "Prima di giocare" with a list of stores, every time — even for a game you own, on an account that had already answered that question, and even after picking a store here in the launcher. The launcher was naming the right edition all along; the client was throwing that away and going to look one up for itself, and the query it uses on that path cannot see which store you chose, so the answer was always "I don't know, ask him". It only did this when the deep link left out one optional field, which the catalog leaves blank for about a third of its entries — hence some titles and not others. That field is now always sent, and the client streams the edition it was given: the one your account owns, or the one you pinned in the game's details panel. 234 titles were affected, 30 of them in a typical owned library.
+
 ## [0.1.4] - 2026-08-21
 
 ### Added
@@ -114,6 +124,7 @@ First public release.
 - AppImage and `.deb` for anyone who would rather not use Flatpak.
 - x86_64 only, matching the GeForce NOW client.
 
+[0.1.5]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.5
 [0.1.4]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.4
 [0.1.3]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.3
 [0.1.2]: https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.2

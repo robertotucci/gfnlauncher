@@ -102,9 +102,211 @@ link on Windows for years
 Which independently confirms three things we had only read out of the bundle:
 the CEF binary is the right target and it wants its own directory as cwd;
 `launchSource=External` is correct; and the id in the link is the **variant**
-id, not the app-level `cmsId`. It also shows `shortName` is not load-bearing —
-that extension sends the constant `game_gfn_pc` for every title — and that an
-empty `parentGameId` is accepted.
+id, not the app-level `cmsId`. It also shows that an empty `parentGameId` is
+accepted, and — the part that took a bug report to understand — that a constant
+`shortName` works for every title.
+
+### `shortName` must always be sent, or the client picks the store itself
+
+**The value is inert. The presence is load-bearing.** This was recorded here as
+"`shortName` is not load-bearing" for several releases, on the strength of
+Playnite sending `game_gfn_pc` for everything, and that reading was wrong in the
+one way that matters: a constant works, an *absent* parameter does not.
+
+The client's `PlatformSelectionUIService` (`files/mall/614.*.js`, v2.0.88.129)
+runs one state before the stream, and this is its whole input:
+
+```js
+onStateStarted() {
+  let N = false
+  if (!activeConfig.shortName) N = true              // ← the only test
+  parentGameId ? …readLaunchMetaData… : cmsId ? this.finalizeStreamerConfig(N, cmsId.toString())
+                                              : handleErrorState(MissingCmsId)
+}
+
+finalizeStreamerConfig(N, cmsId) {
+  if (N) {                                           // no shortName → re-resolve
+    getAppdata(cmsId, { isCmsId: true, includeLibraryFields: true })
+    const f = variants.length === 1 ? variants[0]
+                                    : variants.find(v => v.gfn.library?.selected)
+    f ? (updateStreamerConfig(f.id, f.shortName), moveToNextState())
+      : openPlatformSelectionDialog(…)               // ← the "Prima di giocare" picker
+  } else {
+    updateStreamerConfig(cmsId); moveToNextState()   // ← streams the variant we named
+  }
+}
+```
+
+The route parser defaults a missing `shortName` to `""`, so absent and empty are
+the same falsy thing.
+
+**And the re-resolution can never succeed for a multi-store title**, which is
+what turns a detour into a dead end. Two lines apart in the bundle:
+
+- `fetchAppdata` drops the flag on this branch — `j.isCmsId` selects
+  `getAppDataQuery(true, j.useVpcIdWithCmsId)`, two arguments where the other
+  branch passes three, so `includeLibraryFields` is never applied.
+- `GetAppDataQueryForCmsId` selects `variants { gfn { library { installed
+  playStatus } } }`. There is **no `selected`** in it.
+
+So `variants.find(v => v.gfn.library?.selected)` is always `undefined` when the
+app has more than one variant, and the picker opens however plainly the account
+has already answered the question. Only `variants.length === 1` escapes, which
+is why the symptom looked like "some titles".
+
+Measured against a real 5.893-title signed-in cache: 613 multi-store titles
+carry a slug on the harvested variant and were fine by accident; **234 do not
+and asked every single time**, 30 of them owned. Battlefield 6 and Dishonored:
+Death of the Outsider are both in that set.
+
+The fallback the launcher sends is the **variant id**, in `launchShortName`
+(`src/shared/games.ts`). Not an invention: the feed itself emits a numeric
+`shortName` for 222 of the catalog's 6.917 variants and every one of them is
+that variant's own id, and the client substitutes the app id by the same
+reasoning wherever it meets a variant without a slug —
+`(!V.shortName || "" === V.shortName) && (V.shortName = b.id)`, and
+`launchStreamer(+S.id, S.shortName || l.id, …)` on the mall's own play button.
+
+The full parameter set the route parser reads, for the record:
+`cmsId`, `launchSource`, `shortName`, `appLaunchMode`
+(`Default` | `GamepadFriendly` | `TouchFriendly`), `sdkClient`, `parentGameId`,
+`accountLinked`, `cascadePreviewToken`, `locale`, `previewAtTime`. Only the
+first three are sent. `appLaunchMode=GamepadFriendly` is the one of the rest
+worth a look from a launcher driven by a pad, and it is unexplored.
+
+## Presenting the client's window
+
+The client only takes the whole screen once a stream is running. Everything
+before that — the mall, the pre-launch dialog, the loading screen — is an
+ordinary decorated window, restored at whatever size it was last left. Measured
+on a 3840×2160 KDE Plasma 6 Wayland session, client v2.0.88.129:
+
+```
+WM_CLASS(STRING)             = "GeForceNOW", "GeForceNOW"
+_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 48, 0      # a 48-pixel title bar
+_NET_WM_STATE(ATOM)          = _NET_WM_STATE_FOCUSED
+geometry                     = 2559x1355 @ 1082,342
+```
+
+The geometry comes back from
+`~/.var/app/com.nvidia.geforcenow/.local/state/NVIDIA/GeForceNOW/storage.json`,
+which holds `width`, `height`, `left`, `top` and a Windows-flavoured `showCmd`
+(`1` = normal). The window is an **X11** one even here: the client runs under
+XWayland, which its own `debug.log` records, and KWin reports the same class
+lowercased as `resourceClass = geforcenow`.
+
+### `nv-*` switches on the command line are ignored — do not try again
+
+The binary carries a table of its own switches, read at `0x43cc00`–`0x43d600`
+in v2.0.88.129 by a helper at `0x440ea0` that returns a compiled-in default when
+the switch is absent and otherwise compares the value against the literal string
+`"true"` (so `=false`, `=0` and `=no` are equally false, and only `=true` is
+true). The window-shaped entries, name → default:
+
+| Switch | Default |
+| --- | --- |
+| `nv-windows-borders` | true |
+| `nv-window-persistence` | true |
+| `nv-sdl-fullscreen-exclusive` | false |
+| `nv-sdl-force-windowed` | false |
+| `nv-sdl-resizable` | false — the shipped JSON sets it true |
+
+Plus value switches `nv-native-window-size=W,H` and `nv-def-window-size=W,H`.
+
+**None of them does anything when passed to the process.** The launcher already
+bypasses the wrapper and hands `--url-route` straight to the CEF binary, so the
+obvious next step is to hand it these too. It does not work, and here is the
+evidence so nobody spends the evening again:
+
+- `--nv-windows-borders=false`, `--nv-window-persistence=false` and
+  `--nv-sdl-fullscreen-exclusive=true`, singly and together: the window comes up
+  with the same 48-pixel frame at the same restored geometry.
+- The decisive one, because it has a value that can be read back from outside:
+  `--nv-min-window-size=1600,1000` leaves `WM_NORMAL_HINTS` reporting
+  `program specified minimum size: 640 by 360` — the value in
+  `/app/cef/Resources/GeForceNOW.json`.
+- `--nv-remote-debugging-port=9333` opens no listening socket.
+- `--nv-stdout=true` puts nothing on stdout.
+
+The switches *reach* the process — `/proc/<pid>/cmdline` shows
+`/app/cef/GeForceNOW --nv-sdl-fullscreen-exclusive=true --nv-windows-borders=false`
+— and are simply not consulted. `Resources/GeForceNOW.json` is where the client
+takes them from, and that file is inside the read-only Flatpak deployment.
+`--url-route` is the exception, not the rule.
+
+### What does work: ask the compositor
+
+`_NET_WM_STATE_FULLSCREEN` on the client's window, which KWin honours for an
+XWayland client. Both routes were measured and both produce the same thing —
+`0,0`, `3840x2160`, `_NET_FRAME_EXTENTS = 0, 0, 0, 0`:
+
+```bash
+# EWMH, portable, needs xdotool on the host
+xdotool search --onlyvisible --class GeForceNOW windowstate --add FULLSCREEN
+```
+
+```js
+// KWin script, KDE only, needs no tool at all
+window.noBorder = true
+window.fullScreen = true
+```
+
+Two details decide the implementation in `src/main/gfn/present.ts`:
+
+- **`--onlyvisible` is not optional.** The client owns four X11 windows of class
+  `GeForceNOW`; three are unmapped helpers — one is SDL's `SDLGraphicsContext` —
+  and they exist from the first second. Without the flag the search matches them
+  and exits 0 before there is anything to fullscreen.
+- **Match on `resourceClass`, never on `caption`**: at `windowAdded` the caption
+  is still empty. `xdotool`'s `--name` filter is no use either — measured,
+  `search --onlyvisible --all --class GeForceNOW --name 'GeForce NOW'` matches
+  nothing even once the title is set, because SDL writes `_NET_WM_NAME` and
+  `--name` reads the legacy `WM_NAME`. `getwindowname` does see it.
+
+### Resizing the window before its page loads corrupts the client's layout
+
+The obvious implementation — fullscreen the window the moment it appears — is
+wrong, and it fails in a way that does not look like a window bug at all.
+
+The Vulkan surface follows correctly; the client logs
+`VkDrawable: 3840x2160  SDLWindow: 3840x2160`. What goes wrong is the CEF
+viewport, which ends up at the window size multiplied by the resize ratio a
+second time. On a 3840×2160 display, against a client whose saved geometry was
+2559×1355:
+
+```
+viewport = 3840 × (3840/2559)  by  2160 × (2160/1355)  =  5762 × 3442
+```
+
+Two symptoms, both of which were reported before the cause was found:
+
+- **A dialog the page centres is not centred.** It lands at 0.7503 × 0.7968 of
+  the screen, because only the top-left 3840×2160 of that 5762×3442 layout is
+  on screen. Measured off a screenshot of the "Prima di giocare" store picker.
+- **Every stream is pillarboxed.** The video is fitted to the layout's aspect,
+  5762/3442 = 1.674, so a 16:9 stream on a 16:9 screen is drawn 2160 × 1.674 =
+  3615 px wide.
+
+Measured three ways, with the sums closing exactly:
+
+| fullscreen applied at | bands l/r/t/b | picture | aspect |
+| --- | --- | --- | --- |
+| `windowAdded` | 114 / 111 / 0 / 0 | 3615×2160 | 1.6736 |
+| first `captionChanged` | 0 / 0 / 0 / 0 | 3840×2160 | 1.7778 |
+| never — client's own fullscreen | 0 / 0 / 0 / 0 | 3840×2160 | 1.7778 |
+
+The third row is the control and it names the culprit. The client resizing
+*itself* to the same 3840×2160 when a stream starts lays out perfectly; only a
+resize arriving from outside, before it is ready, is mishandled. `noBorder` is
+not involved — `fullScreen` alone reproduces it identically.
+
+**The fix is to wait for the window's title.** It is empty when the window is
+added and the page sets it once it has a document, which is exactly the thing
+that has to exist for a resize to be laid out against. On this machine
+`captionChanged` fired 226 ms after `windowAdded`, and the window was still
+2559×1403 at that point, so the deferral is real and not an accident of timing.
+A fixed delay was deliberately rejected: an event moves with the machine it runs
+on, a constant tuned on one machine does not.
 
 ## The web player — a second, separate route
 
@@ -137,9 +339,14 @@ Verified here on 16 August 2026, in an Electron window on the launcher's own
 
 Two consequences worth knowing before touching `src/main/gfn/webStream.ts`:
 
-- **The web route takes only a `cmsId`.** There is no `shortName` and no way to
-  pin a store, so a multi-store title asks the user which one — the native deep
-  link resolves that for them. The web path is a fallback, not a peer.
+- **The web route takes the same parameters, `shortName` included.** This entry
+  previously said it took only a `cmsId` and could not pin a store; that was
+  read off the URLs the launcher happened to build, not off the client. The two
+  routes differ in *shape*, not in vocabulary — one parser serves both
+  (`cmsId`, `launchSource`, `shortName`, `appLaunchMode`, `sdkClient`,
+  `parentGameId`, `accountLinked`) and both feed the same `StreamerModule`, so
+  the store-picker rule above applies here identically. The web path is still a
+  fallback rather than a peer, but not for this reason.
 - **`sec-ch-ua` cannot be set from there.** Electron keeps only the last
   `onBeforeSendHeaders` listener per session, and `webAuth` owns that hook on
   this partition — it attaches one for the length of a capture, then clears it
@@ -502,14 +709,28 @@ mutation AddOwnedVariant($cmsId: String!, $locale: String!) {
 have the same shape. Note `variantId` is the **variant** id, i.e. the cmsId of a
 specific store's edition — the same value the launch deep link takes.
 
-All three are wired in `src/main/gfn/library.ts`, but **only `AddOwnedVariant` is
-transcribed from the bundle**; the other two are inferred from "same shape" and
-neither has been observed succeeding. `SelectOwnedVariant` is the shakier of the
-two: its name says *owned*, so it may well refuse a variant the account has not
-been marked as owning. The panel therefore offers "mark owned" (X) beside "set
-launch store" (A), and `src/main/ipc.ts` patches the local catalog **only after
-the server accepts** — a locally-recorded choice GFN never took would vanish at
-the next refresh with nothing to explain why.
+All three are wired in `src/main/gfn/library.ts` and **all three are transcribed
+from the bundle**, which holds them as literals in one operation table. This
+entry used to call the latter two inferred; they are not, and
+`SelectOwnedVariant` is character-for-character the document below. The client
+reaches it through `addPlatformPreference(variantId)` →
+`lcarsService.selectOwnedVariant`, called both when the user changes store from
+the game details page and, via `persistPlatformSelection`, when its own flow
+resolves an unambiguous one.
+
+What is still unobserved is a *successful response* to either from this
+launcher. `SelectOwnedVariant`'s name says *owned*, so it may well refuse a
+variant the account has not been marked as owning — the client only ever calls
+it after ownership is established. The panel therefore offers "mark owned" (X)
+beside "set launch store" (A), and `src/main/ipc.ts` patches the local catalog
+**only after the server accepts** — a locally-recorded choice GFN never took
+would vanish at the next refresh with nothing to explain why.
+
+Worth knowing what that selection is and is not worth: it is the `selected` flag
+this launcher reads in `pickLaunchVariant`, and it is *not* readable on the deep
+link's own resolution path — see the `shortName` section above. Setting it fixes
+which edition the launcher hands over; it is the `shortName` that makes the
+client accept it.
 
 The `requestType=appMetaData` these are sent under is also a guess: the observed
 list of request types never ties one to a mutation.

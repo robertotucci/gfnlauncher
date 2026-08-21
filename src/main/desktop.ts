@@ -14,8 +14,8 @@
  * never to change behaviour.** `window.ts`, `input.ts` and `displaySleep.ts`
  * are all ordered cheapest-and-most-portable-first and all fail open; a branch
  * on `DESKTOP.id` in any of them is how you fix one desktop and break another,
- * silently, on hardware nobody here owns. There are exactly two consumers of
- * the **id**:
+ * silently, on hardware nobody here owns. There are exactly three consumers of
+ * the **id**, and the last two are the same exception:
  *
  * - `announceStartup()` in `index.ts`, which writes the log's second line —
  *   the one the README asks a reporter to quote.
@@ -23,6 +23,15 @@
  *   "show the on-screen keyboard" because there is no cross-desktop protocol
  *   for it, and which reads the keyboard *layout* from a different place on
  *   each.
+ * - `gfn/present.ts`, which asks the compositor to make *somebody else's*
+ *   window fullscreen, and there is no cross-desktop protocol for that either.
+ *
+ * The exception those two share is worth stating, because it is the only thing
+ * that keeps the rule above meaningful: **branch on the id where the question
+ * genuinely has a different answer per desktop, never to work around a
+ * difference a portable call would have handled.** Both of them put the
+ * desktop-specific attempt *before* the portable one rather than instead of it,
+ * and both fail open onto something that needs no desktop's help.
  *
  * `session` is a different axis and a narrower rule applies to it: it may be
  * branched on, because it is not a desktop's taste but a capability the

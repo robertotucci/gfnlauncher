@@ -1,4 +1,5 @@
 import { sessionBus, systemBus, type MessageBus } from '@homebridge/dbus-native'
+import { REPLY_TIMEOUT_MS, withBus } from '../dbus'
 import { DESKTOP, type DesktopId } from '../desktop'
 import { hostExecFile } from '../host'
 
@@ -72,13 +73,6 @@ const LAYOUTS_IFACE = 'org.kde.KeyboardLayouts'
 /** systemd-localed, the one keyboard authority that is on every distribution. */
 const LOCALED = 'org.freedesktop.locale1'
 const LOCALED_OBJECT = '/org/freedesktop/locale1'
-
-/**
- * Short, because this is answered from inside a 60 Hz tick's continuation and
- * the service is either there or it is not. The portal's fifteen seconds are
- * for a dialog somebody is reading; nothing here waits on a person.
- */
-const REPLY_TIMEOUT_MS = 4_000
 
 /** What the compositor says about its keyboard, reduced to what decides this. */
 export interface SystemKeyboardState {
@@ -519,64 +513,6 @@ async function readLocaledLayout(): Promise<string | null> {
     const value = readVariant(raw)
     return typeof value === 'string' ? parseXkbLayoutList(value) : null
   })
-}
-
-type Invoke = (
-  destination: string,
-  path: string,
-  iface: string,
-  member: string,
-  signature?: string,
-  body?: unknown[]
-) => Promise<unknown[]>
-
-/**
- * Opens a bus, runs one question on it, and always closes it.
- *
- * Shared by the two layout readers because they differ only in which bus and
- * which member, and because the thing easiest to get wrong is the same in both:
- * a connection left open holds the launcher's event loop, and these are called
- * from a pad press that may be the last one of the evening.
- *
- * Answers null on anything at all — a bus that would not open, a service that
- * is not there, a reply that never came. This is a fallback chain and every
- * step of it is allowed to have nothing to say.
- */
-async function withBus(
-  open: () => MessageBus,
-  ask: (invoke: Invoke) => Promise<string | null>
-): Promise<string | null> {
-  let bus: MessageBus
-
-  try {
-    bus = open()
-  } catch {
-    return null
-  }
-
-  const invoke: Invoke = (destination, path, iface, member, signature, body) =>
-    new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${member} did not answer`)), REPLY_TIMEOUT_MS)
-      timer.unref?.()
-
-      bus.invoke({ destination, path, interface: iface, member, signature, body }, (error, ...result) => {
-        clearTimeout(timer)
-        if (error) reject(error instanceof Error ? error : new Error(String(error)))
-        else resolve(result)
-      })
-    })
-
-  try {
-    return await ask(invoke)
-  } catch {
-    return null
-  } finally {
-    try {
-      bus.connection.end()
-    } catch {
-      // Already gone is the state we wanted it in.
-    }
-  }
 }
 
 /**

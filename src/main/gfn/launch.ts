@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { LaunchRequest, LaunchResult } from '@shared/types'
+import { launchShortName } from '@shared/games'
 import { hostSpawn } from '../host'
 import { GFN_APP_ID, GFN_CEF_BINARY, GFN_CEF_DIR, isGfnRunning, killGfn } from './flatpak'
 
@@ -14,12 +15,42 @@ const LAUNCH_SOURCE = 'External'
  *
  * Shape, taken from the client binary:
  *   --url-route="#?cmsId=<id>&launchSource=<src>&shortName=<name>&parentGameId=<pid>"
+ *
+ * **`shortName` is never omitted, and that is the whole reason this function is
+ * interesting.** Its *value* is inert — Playnite has shipped the constant
+ * `game_gfn_pc` for every title for years — but its *presence* is the switch
+ * that decides whether the client honours the variant we named or goes and
+ * resolves one itself. From the client's `PlatformSelectionUIService`:
+ *
+ * ```js
+ * let N = false
+ * if (!activeConfig.shortName) N = true          // ← the only input
+ * finalizeStreamerConfig(N, cmsId.toString())
+ * // N false → updateStreamerConfig(cmsId); moveToNextState()   — streams our variant
+ * // N true  → refetch the app, variants.find(v => v.gfn.library?.selected)
+ * //           …and open the store picker when that finds nothing
+ * ```
+ *
+ * That second branch can never succeed for a multi-store title: it fetches with
+ * `isCmsId: true`, which is the path where `fetchAppdata` drops
+ * `includeLibraryFields`, and the resulting `GetAppDataQueryForCmsId` selects
+ * `library { installed playStatus }` — no `selected`. So the search is always
+ * undefined and the user is always asked, however clear the answer is on our
+ * side. See docs/gfn-api.md.
+ *
+ * The fallback is the variant id, which is not an invention: the feed itself
+ * emits a numeric `shortName` for 222 variants and every one of them is that
+ * variant's own id. The client does the same thing internally when a variant
+ * has no slug (`V.shortName = b.id`).
+ *
+ * `parentGameId` is still omitted when absent, and that omission *is* correct —
+ * the app normalises a missing optional to `""`, so the two are the same thing.
  */
 export function buildUrlRoute(request: LaunchRequest): string {
   const params = new URLSearchParams()
   params.set('cmsId', request.cmsId)
   params.set('launchSource', LAUNCH_SOURCE)
-  if (request.shortName) params.set('shortName', request.shortName)
+  params.set('shortName', launchShortName(request))
   if (request.parentGameId) params.set('parentGameId', request.parentGameId)
   return `#?${params.toString()}`
 }

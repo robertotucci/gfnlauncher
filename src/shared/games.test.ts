@@ -6,6 +6,7 @@ import {
   cycleGenre,
   formatReleaseDate,
   genreLabel,
+  launchShortName,
   resolveLaunchPath,
   resolveLaunchTarget,
   storeLabel
@@ -167,6 +168,35 @@ describe('resolveLaunchTarget', () => {
     // survives. Handing GFN a dead id would fail the launch outright.
     const target = resolveLaunchTarget(game({ selectedVariantId: '999' }))
     expect(target.cmsId).toBe('100')
+  })
+})
+
+describe('launchShortName', () => {
+  it('passes the feed slug through untouched', () => {
+    expect(launchShortName({ cmsId: '100', gameId: '100', shortName: 'witcher3' })).toBe(
+      'witcher3'
+    )
+  })
+
+  it('answers with the variant id when the feed has no slug', () => {
+    // The catalog leaves it empty on 4.504 of 6.917 variants, and the client
+    // reads an absent shortName as permission to pick a store itself. The id is
+    // what the feed puts there for the 222 variants it does fill in numerically.
+    for (const shortName of [null, undefined, '']) {
+      expect(launchShortName({ cmsId: '100', gameId: '100', shortName })).toBe('100')
+    }
+  })
+
+  it('resolves whatever resolveLaunchTarget produced, not the game', () => {
+    // The pair has to stay together: the chosen edition's id with its own slug,
+    // or with its own id — never with a sibling store's.
+    const target = resolveLaunchTarget(
+      game({
+        selectedVariantId: '200',
+        stores: [store(), store({ storeId: 'EPIC', variantId: '200', shortName: null })]
+      })
+    )
+    expect(launchShortName(target)).toBe('200')
   })
 })
 

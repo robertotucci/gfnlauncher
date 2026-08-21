@@ -21,6 +21,22 @@ export const GFN_CEF_BINARY = '/app/cef/GeForceNOW'
  */
 export const GFN_CEF_DIR = '/app/cef'
 
+/**
+ * X11 resource class of the window the client puts on screen.
+ *
+ * Measured rather than assumed, from both sides: `xprop` on a running client
+ * reports `WM_CLASS(STRING) = "GeForceNOW", "GeForceNOW"`, and a KWin script
+ * looking at the same window reports `resourceClass` as `geforcenow` — KWin
+ * lowercases it, which is why every match on this string does too.
+ *
+ * SDL takes the class from the binary's own name, so bypassing the Flatpak
+ * wrapper — which is what `buildLaunchArgv` does — does not change it. The
+ * window is an X11 one even on a Wayland session: the client runs under
+ * XWayland, which its `debug.log` records and which is what makes
+ * `gfn/present.ts` possible at all.
+ */
+export const GFN_WM_CLASS = 'GeForceNOW'
+
 /** Parses the version out of `flatpak info` output (it lives in the Subject line). */
 export function parseVersion(flatpakInfoOutput: string): string | null {
   return /Version:\s*([0-9][0-9.]*)/.exec(flatpakInfoOutput)?.[1] ?? null

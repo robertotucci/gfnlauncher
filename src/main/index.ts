@@ -6,6 +6,7 @@ import { armBluetoothWatch, disarmBluetooth } from './bluetooth'
 import { armClientWatch, disarmClientWatch } from './clientWatch'
 import { DESKTOP } from './desktop'
 import { disarmHandback } from './gfn/handback'
+import { disarmClientFullscreen } from './gfn/present'
 import { FLATPAK_ID, IS_SANDBOXED } from './host'
 import { armInputWatch, disarmInputWatch } from './inputWatch'
 import { registerIpcHandlers } from './ipc'
@@ -77,6 +78,13 @@ function start(): void {
       optimizer.watchWindowShortcuts(window)
     })
 
+    // Before anything can arm one: a KWin script is the only thing this
+    // launcher creates that can outlive the process, and `will-quit` cannot
+    // await the unload it asks for. Clearing at start is what turns "the last
+    // exit probably unloaded it" into "nothing from a previous run is still
+    // reshaping windows". A no-op away from KDE and cheap on it.
+    disarmClientFullscreen()
+
     registerIpcHandlers(() => mainWindow)
 
     // Before the window, not after: the GeForce NOW client can update while the
@@ -141,6 +149,12 @@ function start(): void {
   app.on('will-quit', () => {
     console.info('Launcher quitting.')
     disarmHandback()
+    // Not covered by the line above in every case: a launch that never spawned
+    // arms no watch, and the KWin script this unloads is a *resident* connection
+    // inside the compositor. One left behind would go on fullscreening GeForce
+    // NOW windows for a launcher that no longer exists, which is the one thing
+    // in here that outlives the process.
+    disarmClientFullscreen()
     disarmClientWatch()
     // Holds open joystick devices and, while a cursor is up, a portal session
     // with a virtual pointer the compositor is keeping alive on our behalf.

@@ -702,6 +702,15 @@ export function SettingsScreen({
         </Section>
 
         <Section title="GeForce NOW client">
+          <ToggleRow
+            id="setting:clientFullscreen"
+            scope={scope}
+            label="Open games fullscreen"
+            description="GeForce NOW only takes the whole screen once a game is streaming; its menus and loading screen come up in a window with a title bar. On, the launcher asks the desktop to make that window fullscreen and borderless from the start. Applies to the next game you launch."
+            value={settings.clientFullscreen}
+            onConfirm={() => onUpdate({ clientFullscreen: !settings.clientFullscreen })}
+          />
+
           <ActionRow
             id="setting:openGfn"
             scope={scope}

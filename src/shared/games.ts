@@ -211,6 +211,32 @@ export function resolveLaunchTarget(game: GfnGame): LaunchRequest {
 }
 
 /**
+ * The slug a deep link carries: the variant's own when the feed has one, the
+ * variant id when it does not.
+ *
+ * **Never absent, and that is the point.** The client treats the presence of
+ * `shortName` as permission to stream the variant it was handed; without it,
+ * it throws the id away and resolves a variant itself — a search that cannot
+ * succeed for a multi-store title and ends in the store picker. `buildUrlRoute`
+ * carries the evidence.
+ *
+ * The fallback is not an invention. The feed emits a numeric `shortName` for
+ * 222 of the catalog's 6.917 variants and every one of them is that variant's
+ * own id, and the client substitutes the app id by the same reasoning when a
+ * variant has no slug.
+ *
+ * `||` rather than `??`: the feed returns `""` for 4.504 variants, and an empty
+ * slug is absence — the client parses the parameter into a string that defaults
+ * to `""` and then tests it for truthiness.
+ *
+ * Here rather than beside either builder because both launch paths reach the
+ * same Angular app, and the parameter means the same thing on each.
+ */
+export function launchShortName(request: LaunchRequest): string {
+  return request.shortName || request.cmsId
+}
+
+/**
  * Which of the two launch paths a play press should take.
  *
  * The other half of `resolveLaunchTarget`: that one answers *what* to start,

@@ -420,6 +420,8 @@ flatpak run --command=/app/cef/GeForceNOW --cwd=/app/cef com.nvidia.geforcenow \
 
 `launchSource=External` is a literal lifted from the shipped bundle — one of four values in an enum the bundle maps straight onto a telemetry dimension, so it tags provenance and selects no behaviour. Bypassing the wrapper also skips `GeForceNOW_Downloader` and the self-update check, so the launcher should not become the user's only way to start GFN.
 
+**`shortName` is never omitted, and it is the one parameter that changes what the client does.** Its *value* is inert — Playnite has shipped a constant for every title for years — but the client reads its *presence* as permission to stream the variant it was handed. Without it, the client discards our id and resolves a variant itself, through a query (`GetAppDataQueryForCmsId`, on the `isCmsId` branch that silently drops `includeLibraryFields`) which does not select `library.selected`. So the lookup can never succeed for a title with more than one store, and the "Prima di giocare" store picker opens however plainly the account has already answered. That was a real bug: the catalog leaves the slug empty on 4.504 of 6.917 variants, and 234 multi-store titles asked every single time. `launchShortName` in `src/shared/games.ts` falls back to the variant id — which is what the feed itself puts there for the 222 variants it fills in numerically, and what the client substitutes internally when a variant has no slug. `parentGameId` *is* still omitted when absent, and there the omission is right: the app normalises a missing optional to `""`. `docs/gfn-api.md` carries the bundle excerpts.
+
 **Which is why `gfn:open` exists and goes the other way.** `buildOpenArgv()` is a plain `flatpak run com.nvidia.geforcenow` — through the wrapper, precisely so the downloader and the self-update check *do* run. It is the Settings row that hands the screen to the real client for the things the launcher does not mirror (stream quality, account linking, controller mapping), and it is the one path that still `stepAside`s: a fullscreen launcher sitting on top of the window it just opened is a button that looks broken. **Launching a game does not**, and that is the subject of "Getting the screen back" below.
 
 **Confirmed against client v2.0.87.130**: a cold start receives the route verbatim (`urlRoute value is: #?cmsId=…&launchSource=External&shortName=…`) and the app builds a streamer config from it. The parameter order in `buildUrlRoute` is not a guess either — the binary's own string table holds that template contiguously, because it is how the client relaunches itself. To watch a link arrive, grep `~/.var/app/com.nvidia.geforcenow/.local/state/NVIDIA/GeForceNOW/debug.log`; note the `.var` path, since the host-side `~/.local/state/NVIDIA/GeForceNOW/` holds only the *wrapper's* log and window geometry, and note that `console.log` beside it **contains tokens** — grep it, never paste it.
@@ -431,14 +433,56 @@ flatpak run --command=/app/cef/GeForceNOW --cwd=/app/cef com.nvidia.geforcenow \
 Three more things about the web path:
 
 - **The two clients ship different route tables**, so the two URL forms are not interchangeable. The Flatpak's bundle has a `deeplink` route and no `streamer`; the web build is the other way round.
-- **The web route takes only a `cmsId`** — no `shortName`, no way to pin a store — so a multi-store title asks the user which one, where the native deep link resolves it for them.
+- **The two routes differ in shape, not in vocabulary.** One parser reads `cmsId`, `launchSource`, `shortName`, `appLaunchMode`, `sdkClient`, `parentGameId` and `accountLinked` off either form, and both feed the same `StreamerModule` — so `buildStreamerUrl` sends `shortName` for exactly the reason `buildUrlRoute` does, and this path can pin a store after all. It was recorded here as unable to, which was read off the URLs this launcher happened to build rather than off the client.
 - **It must not call `stepAside`.** That stream is our own window; a minimised launcher behind it could not be raised again once it closed, since there is nothing a pad can do to un-iconify a window. `restoreLauncher` in `main/window.ts` is the way back, and it re-applies fullscreen for the same reason `second-instance` does. It does still set `handedOff`, though: the stream window is fullscreen and takes the focus, so the launcher behind it is in exactly the position it is in behind the native client.
+
+### Making the client's window fullscreen
+
+`src/main/gfn/present.ts`, behind `Settings.clientFullscreen`, which defaults on.
+
+**The client is only fullscreen while it is streaming.** Its mall, the pre-launch dialog and the loading screen are an ordinary decorated window restored at whatever size it was last left — measured at `2559×1355 @ 1082,342` with `_NET_FRAME_EXTENTS = 0, 0, 48, 0` on a 3840×2160 display, over a launcher that is deliberately still fullscreen behind it. That gap is the one moment the desktop shows through, and on a machine driven from a sofa it is the whole difference between an appliance and a program.
+
+**Asking the client does not work, and `docs/gfn-api.md` records why in detail.** The binary has `nv-windows-borders`, `nv-window-persistence` and `nv-sdl-fullscreen-exclusive` in its own switch table and consults none of them from argv; `--nv-min-window-size=1600,1000` leaves `WM_NORMAL_HINTS` reporting the `640 by 360` its shipped JSON carries. The switches reach the process and are ignored. `--url-route` is the exception, not the rule. So the request goes to the thing that actually owns the frame.
+
+| | KDE | everywhere else |
+| --- | --- | --- |
+| How | a KWin script over `org.kde.KWin` | `xdotool` on the host |
+| Costs | a permission the manifest already grants | a host tool that may be absent |
+| Timing | `workspace.windowAdded` | a 700 ms sweep, 45 s deadline |
+
+**KWin first on KDE, because it needs nothing new and it has no race.** The script is written into `userData` — a *host* path in every packaging, which is the point, since KWin opens the file itself from outside the sandbox — loaded **before** the client is spawned, and connected to `workspace.windowAdded`. The result is `0,0`, `3840×2160`, `_NET_FRAME_EXTENTS = 0, 0, 0, 0`. It matches `resourceClass`, lowercased, never `caption`, which is empty when the window is added.
+
+**But it must not fullscreen the window there and then, and that is the whole of the correctness here.** Resizing the client's window before its page has loaded corrupts the CEF layout for the rest of the session. The Vulkan surface follows fine — the client logs `VkDrawable: 3840x2160  SDLWindow: 3840x2160` — while the web viewport ends up at the window size times the resize ratio *again*: `3840 × (3840/2559)` by `2160 × (2160/1355)` = `5762 × 3442`. The user sees two things, neither of which looks like a window bug: a dialog the page centres appears at 0.75 × 0.80 of the screen, and every stream is pillarboxed, because the video is fitted to the layout's 1.674 aspect rather than the screen's 1.778.
+
+| fullscreen applied at | bands l/r/t/b | picture | aspect |
+| --- | --- | --- | --- |
+| `windowAdded` | 114 / 111 / 0 / 0 | 3615×2160 | 1.6736 |
+| first `captionChanged` | 0 / 0 / 0 / 0 | 3840×2160 | 1.7778 |
+| never — client's own fullscreen | 0 / 0 / 0 / 0 | 3840×2160 | 1.7778 |
+
+The third row is the control: the client resizing *itself* to the same size when a stream starts lays out perfectly, so it is specifically an outside resize arriving too early. `noBorder` is not involved; `fullScreen` alone reproduces it.
+
+**So both backends wait for the window's title**, which is empty at creation and set by the page once it has a document — precisely the thing a resize needs to be laid out against. KWin has the event (`captionChanged`, 226 ms after `windowAdded` here, with the window still at its old size); X11 has the property behind it, read with `getwindowname` because `xdotool`'s `--name` filter reads the legacy `WM_NAME` that SDL never writes. A fixed delay was rejected on purpose: an event moves with the machine, a constant tuned on this one is a regression waiting for a slower one. `docs/gfn-api.md` records the measurements.
+
+**`xdotool` second, because the request is portable and the tool is not.** `_NET_WM_STATE_FULLSCREEN` is EWMH and KWin honouring it for an XWayland client is what the KDE path proves; having `xdotool` installed is the part nobody can promise. It runs through `host.ts` for the usual reason and one more: on a Wayland session the Flatpak has `--socket=fallback-x11`, which grants **no** X11 socket, so an X11 client inside the sandbox could not connect at all — `flatpak-spawn --host` puts it in the host session, where `DISPLAY` names the XWayland server the client is already talking to.
+
+KDE gets both rather than only KWin. A session with `--talk-name=org.kde.KWin` revoked in Flatseal is still one where `xdotool` would work, and degrading to the portable backend beats reporting a permission problem the user did not know they had.
+
+**`--onlyvisible` is what makes the sweep terminable.** The client owns four X11 windows of class `GeForceNOW` and three are unmapped helpers — one is SDL's `SDLGraphicsContext` — present from the first second. Without the flag the search matches those and exits 0 long before there is anything to fullscreen, so the sweep stops on its own false success and the real window keeps its title bar. The sweep is three `xdotool` calls rather than one chained `search … windowstate` for the reason above: the title has to be read in between.
+
+**Disarming matters more than arming.** A KWin script is a *resident* connection inside the compositor: one left behind goes on fullscreening GeForce NOW windows for a launcher that no longer exists, including the window `gfn:open` opens — the one path where a window with no title bar is actively unhelpful. So it is unloaded from the session watch's `onEnded`, which fires exactly once however the watch ended, from the launch-failed branch, which arms no watch at all, and from `will-quit`.
+
+**It is a setting rather than a constant, and that is not a reversal of the `hideOnLaunch` decision above.** That one was removed because one of its two behaviours was broken. Both of these work; what is uncertain is the ground under them. This is the only place the launcher reaches outside itself to reshape another application's window, through interfaces — a compositor's scripting API, a third-party X11 tool — that nobody has promised to keep. If a Plasma release renames a signal or a window manager starts placing the window somewhere unhelpful, the person in front of it needs to be able to say *stop doing that* without waiting for a release.
+
+Nothing here is fatal and nothing here is reported to the screen. Every failure is a log line, because the alternative is a notice over a stream that is about to start, which is worse than the decorated window it would be complaining about — and a client that came up with a title bar is exactly the behaviour this launcher had before.
 
 ### Getting the screen back
 
 **The client does not exit when a stream ends.** It returns to its own mall, fullscreen, holding the focus — and on a machine with no mouse that holds the launcher hostage, because there is nothing a pad can do to raise a window the compositor is not showing. Two changes follow, and they are a pair:
 
-**Launching a game no longer minimises the launcher.** It used to, behind a `hideOnLaunch` setting that defaulted on, and the reasoning was sound in isolation: GFN takes the screen, so do not fight it for focus. What it produced was a dead end. GFN raises itself on its own — it is a new fullscreen window — so the minimise bought nothing, and an iconified launcher on Wayland is one the pad cannot raise. The setting is gone rather than defaulted off: two behaviours here is two things to test and one of them is broken.
+**Launching a game no longer minimises the launcher.** It used to, behind a `hideOnLaunch` setting that defaulted on, and the reasoning was sound in isolation: GFN takes the screen, so do not fight it for focus. What it produced was a dead end. GFN raises itself on its own — a new window, on top, that becomes fullscreen the moment a stream starts — so the minimise bought nothing, and an iconified launcher on Wayland is one the pad cannot raise. The setting is gone rather than defaulted off: two behaviours here is two things to test and one of them is broken.
+
+That sentence used to read "it is a new fullscreen window", and it was wrong about *when*. See "Making the client's window fullscreen" below: the client is only fullscreen while streaming, and everything before that is a decorated window with the launcher showing around it.
 
 **`src/main/gfn/handback.ts` closes the client and takes the screen back**, and it is deliberately *two* jobs with two signals, because they fail differently:
 

@@ -15,8 +15,22 @@ describe('buildStreamerUrl', () => {
     // route and no `streamer`; the web build is the other way round. Sending
     // either form to the wrong target opens the home screen at best.
     expect(buildStreamerUrl({ cmsId: '100', gameId: '100' })).toBe(
-      'https://play.geforcenow.com/mall/#/streamer?launchSource=External&cmsId=100'
+      'https://play.geforcenow.com/mall/#/streamer?launchSource=External&cmsId=100&shortName=100'
     )
+  })
+
+  it('pins the store here too, which this route was long thought unable to do', () => {
+    // The two routes differ in shape, not in vocabulary — the same parser reads
+    // shortName off either one — and without it a multi-store title gets the
+    // picker on this path exactly as it did on the deep link.
+    expect(buildStreamerUrl({ cmsId: '100', gameId: '100', shortName: 'witcher3' })).toContain(
+      '&shortName=witcher3'
+    )
+    for (const shortName of [null, undefined, '']) {
+      expect(buildStreamerUrl({ cmsId: '100', gameId: '100', shortName })).toContain(
+        '&shortName=100'
+      )
+    }
   })
 
   it('keeps the query inside the fragment', () => {

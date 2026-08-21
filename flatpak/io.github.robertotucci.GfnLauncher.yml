@@ -130,6 +130,19 @@ finish-args:
   # launcher composes the text in a window of its own — with one line in the log
   # saying which. Revoking this permission looks like "KWin did not answer" and
   # the message says how to put it back.
+  #
+  # **A second caller since 0.1.5**: `src/main/gfn/present.ts` loads a KWin
+  # script over `/Scripting` so the GeForce NOW window comes up fullscreen and
+  # borderless instead of showing a title bar until the stream starts. It is the
+  # same shape of exception — no cross-desktop protocol exists for "make that
+  # other application's window fullscreen" — and the same failure policy: away
+  # from KDE, and on a KDE session where this name is revoked, it falls back to
+  # `xdotool` on the host and then to doing nothing, with a log line either way.
+  #
+  # The script file is written into this app's own `userData`, which is a host
+  # path (`~/.var/app/io.github.robertotucci.GfnLauncher/config/gfn-launcher`),
+  # because KWin opens it itself from outside the sandbox. No extra
+  # `--filesystem=` is needed for that and none should be added.
   - --talk-name=org.kde.KWin
 
   # ── Which keyboard the person actually has ──────────────────────────────────

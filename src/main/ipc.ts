@@ -35,6 +35,7 @@ import { logFilePath } from './log'
 import { detectGfn } from './gfn/flatpak'
 import { armHandback, disarmHandback } from './gfn/handback'
 import { isLaunchRequest, launchGame, openGfnClient } from './gfn/launch'
+import { armClientFullscreen, disarmClientFullscreen } from './gfn/present'
 import { launchViaWeb } from './gfn/webStream'
 import { getCatalog, markOwned, markSelected, patchGame, refreshCatalog } from './gfn/catalog'
 import { getDetails } from './gfn/details'
@@ -115,6 +116,17 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         `[mode=${settings.launchMode}, client ${installed ? 'installed' : 'not installed'}]`
     )
 
+    // **Before the spawn, not after it**, and that ordering is the whole of the
+    // KDE path's correctness: the KWin script connects to `windowAdded`, so it
+    // has to be resident before the client can create a window. Arm it late and
+    // the user sees the decorated window for as long as it took to get here,
+    // which is the thing this exists to remove.
+    //
+    // Only on the native path. The web player is our own `BrowserWindow` and is
+    // already `fullscreen: true`; pointing a compositor script at it would be
+    // asking somebody else to do what we can do ourselves.
+    if (path === 'native' && settings.clientFullscreen) armClientFullscreen()
+
     const result =
       path === 'web'
         ? await launchViaWeb(request, () => {
@@ -132,7 +144,15 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
                 child,
                 autoClose: true,
                 onClientGone: () => void restoreLauncher(getWindow()),
-                onEnded: () => setHandedOff(false, 'session watch ended')
+                onEnded: () => {
+                  setHandedOff(false, 'session watch ended')
+                  // Here rather than beside `onClientGone`, because this fires
+                  // exactly once however the watch ended — including a disarm
+                  // from the next launch — and a KWin script left connected to
+                  // `windowAdded` would fullscreen the next client the user
+                  // opens by hand.
+                  disarmClientFullscreen()
+                }
               })
           })
 
@@ -142,8 +162,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // store edition GFN was handed, which does not match a tile.
       await recordPlay(request.gameId)
     } else {
-      // Nothing started, so no watch was armed and nothing else will release it.
+      // Nothing started, so no watch was armed and nothing else will release it
+      // — including the compositor script, which would otherwise sit waiting for
+      // a window that is never coming.
       setHandedOff(false, 'launch failed')
+      disarmClientFullscreen()
     }
 
     // **The launcher deliberately does not step aside here.** GFN opens

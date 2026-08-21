@@ -4,7 +4,7 @@ import { buildLaunchArgv, buildOpenArgv, buildUrlRoute, isLaunchRequest } from '
 describe('buildUrlRoute', () => {
   it('puts cmsId first and always tags the launch source', () => {
     expect(buildUrlRoute({ cmsId: '100', gameId: '100' })).toBe(
-      '#?cmsId=100&launchSource=External'
+      '#?cmsId=100&launchSource=External&shortName=100'
     )
   })
 
@@ -18,14 +18,34 @@ describe('buildUrlRoute', () => {
     )
   })
 
-  it('omits optional parameters rather than sending empty ones', () => {
+  it('always carries a shortName, because its absence hands the store choice back', () => {
+    // Not cosmetic. Without the parameter the client discards the variant we
+    // named and resolves one itself, through a query that cannot see which
+    // store the account picked — so every multi-store title opens the picker.
+    // The feed leaves the slug empty on 4.504 of 6.917 variants, so this is
+    // the common case, not the edge one.
+    for (const shortName of [null, undefined, '']) {
+      expect(buildUrlRoute({ cmsId: '100', gameId: '100', shortName })).toContain(
+        '&shortName=100'
+      )
+    }
+  })
+
+  it('prefers the feed slug over the id when there is one', () => {
+    expect(buildUrlRoute({ cmsId: '100', gameId: '100', shortName: 'witcher3' })).toContain(
+      '&shortName=witcher3'
+    )
+  })
+
+  it('still omits parentGameId rather than sending an empty one', () => {
+    // The one optional where omission is right: the app normalises a missing
+    // parameter to `""`, so sending nothing and sending empty are the same.
     const route = buildUrlRoute({
       cmsId: '100',
       gameId: '100',
       shortName: null,
       parentGameId: null
     })
-    expect(route).not.toContain('shortName')
     expect(route).not.toContain('parentGameId')
   })
 
