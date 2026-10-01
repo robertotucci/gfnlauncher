@@ -150,6 +150,7 @@ Some things are not a grid. **Hold L3 + R3** — both stick clicks, for about ha
 | **A** | Left click |
 | **B** | Right click |
 | **LB + RB** | Show or hide the on-screen keyboard |
+| **D-pad ↑ / ↓** | Volume up / down — outside the launcher's own windows |
 | **☰** | Put the cursor away |
 
 With the keyboard open the stick picks a key and **A** types it; **LB + RB** again — or **B** — hides it. It is alphabetical like the search one, and it has every character on it, because a password with a backslash in it is not one you can leave out.
@@ -159,6 +160,8 @@ The keyboard is on the shoulders rather than on a face button because with a cur
 **The keyboard only exists in the two places the launcher itself puts a web page in front of you**: **signing in to NVIDIA**, which is the one screen a pad genuinely cannot navigate and the reason an account could not be linked from a sofa at all, and the **web player**. Both work out of the box, with nothing to switch on. On the desktop and inside a game there is no keyboard — see the note at the end of this section.
 
 **Outside the launcher it is off by default** — see *Cursor outside the launcher* under Settings → Pointer. Switched on, the same hold gives you a real cursor on the desktop and, more usefully, **inside a running game**: a Steam licence prompt or an updater that wants a click is otherwise a stuck session. It asks your desktop for permission the first time, in a system dialog that needs a real mouse or keyboard to answer; after that it is remembered and silent.
+
+**It is also how you turn the volume up in a game.** With the cursor up, **D-pad ↑ / ↓** moves the volume of the sound output the game is playing on — your Bluetooth headphones when they are connected — five points a press, and holding repeats. A card in the corner says the level and which output moved (on KDE Plasma it is the shell's own volume popup, which does not take the game out of fullscreen). It stops at 100%, and turning it up from muted unmutes. It needs `pactl`, which every PulseAudio and PipeWire desktop has.
 
 Two things to know before you use it in a game:
 

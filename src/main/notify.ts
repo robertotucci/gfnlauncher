@@ -162,7 +162,9 @@ const OSD_ICONS: Record<NoticeIcon, string> = {
   display: 'video-display',
   computer: 'computer',
   phone: 'phone',
-  device: 'preferences-desktop-peripherals'
+  device: 'preferences-desktop-peripherals',
+  volume: 'audio-volume-high',
+  'volume-off': 'audio-volume-muted'
 }
 
 /**

@@ -206,7 +206,7 @@ It costs one permission dialog. That is a system window, so the first grant need
 
 So the mapping is asked for, once per device at open: `joydevLayout` reproduces the kernel's own ordering over the capability bitmaps in that node's `device/capabilities/` directory under `/sys/class/input`, which is `JSIOCGBTNMAP` without the ioctl this module exists to avoid. Those same bitmaps now answer the *browser's* numbering as well — see "`Gamepad.mapping` is empty far more often than it looks" above — so `joydevLayout` and the codes around it live in `@shared/padLayout`, and `src/main/padProfile.ts` is what reads them out of `/sys`. It enumerates `/sys/class/input` where this file enumerates `/dev/input`, because this one has to *open* the node and that one does not, which is also what leaves the profiles readable in a sandbox that has lost `--device=all`. Everything downstream is stated in **evdev codes** rather than indices (`CHORD_BUTTONS_EVDEV`, `POINTER_ACTIONS_EVDEV`, `PadReading`), which is also what makes two pads foldable into one reading — button 9 on one device and button 9 on another are not the same button. The same rule settles the axes: the right stick is ABS_RX/ABS_RY where the device has both and ABS_Z/ABS_RZ where it does not, so a Bluetooth pad scrolls with the stick rather than with a trigger. When `/sys` cannot be read the code falls back to the `xpad` layout and **says so in the log**, and every pad that attaches writes one line naming the two indices its L3 and R3 landed on — the diagnostic that would have turned this bug into one grep.
 
-**`evdev.ts` has exactly one consumer and must never gain another.** It keeps reading the pad while a game is on screen, which is precisely the situation the launcher spent a release learning not to act in. The only things downstream of it are the portal's `Notify*` calls and one boolean pushed to the renderer. **The vocabulary is not the reader**, and the split is what keeps that true while three processes share the same tables: `@shared/padLayout` is codes and pure translation, `padProfile.ts` reads files, and neither can produce a button press. `openPadReader` is still the only thing in the repository that opens a device, and it still has one caller.
+**`evdev.ts` has exactly one consumer and must never gain another.** It keeps reading the pad while a game is on screen, which is precisely the situation the launcher spent a release learning not to act in. The only things downstream of it are the portal's `Notify*` calls, one boolean pushed to the renderer, and a volume step handed to `volume.ts` — see [The D-pad is the volume](#the-d-pad-is-the-volume). **The vocabulary is not the reader**, and the split is what keeps that true while three processes share the same tables: `@shared/padLayout` is codes and pure translation, `padProfile.ts` reads files, and neither can produce a button press. `openPadReader` is still the only thing in the repository that opens a device, and it still has one caller.
 
 **The keyboard we draw works in our own windows only, and this was measured.** `NotifyKeyboardKeysym` reaches whatever has the focus, so the plumbing is there — but drawing a keyboard over somebody else's fullscreen window needs a floating surface. A window created the way that overlay would have to be — `focusable: false`, `alwaysOnTop`, `showInactive()` — was tried on KDE Wayland and the window underneath **lost its focus anyway**. Since the focus is exactly what decides where a keystroke lands, a keyboard drawn that way types into itself. Ours is therefore in the preload, which is also where the typing mostly has to happen.
 
@@ -260,6 +260,22 @@ The rest is driven **entirely from main** — main reads the pad from joydev, ow
 Either keyboard is taken away when the cursor goes. KWin's would otherwise sit on top of whatever is on screen for the rest of the session, and ours would be a window whose only input loop has just ended.
 
 Keysyms rather than keycodes, and the difference is not academic: a keycode is a *position*, so `KEY_2` shifted is `@` on a US layout and `"` on an Italian one. `src/shared/keycodes.ts` keeps a US keycode table as a fallback for a portal with no keysym support, and says so in the log when it takes it.
+
+#### The D-pad is the volume
+
+**In a stream, the volume of the headphones is the thing most often wanted and least reachable**: the launcher's renderer is suspended, the game is remote, and the only things on the sofa are the pad and whatever buttons the headset has. With the desktop cursor up the D-pad was the one free control — the left stick is the cursor, the right stick the wheel, the face buttons a mouse — so **D-pad ↑ / ↓** steps the volume, with the grid's press, 420 ms, 90 ms rhythm through `stepOskNav`. Only while the composed keyboard is closed, since there the D-pad moves the selection, and a direction already held as the mode opens or the keyboard closes is **adopted** rather than read as a press, by the same rule as the buttons.
+
+This is a second output of the same loop, **not a second consumer of `evdev.ts`**, and that is why it lives here rather than behind a chord of its own. A chord that worked with the cursor down would have needed the joydev reader open for the whole of every game, setting or no setting — the cost `syncEnabled` exists to avoid. `desktop.ts` hands a direction to a dependency and imports nothing that runs a command; how far a step goes is `volume.ts`'s.
+
+**What moves is the default output, not "the Bluetooth headset".** The GeForce NOW client plays to the default sink and PipeWire makes a headset the default when it connects, so in the case that was asked about the two are the same — and somebody on the television's speakers has the same problem from the same sofa. The notice names the output, so which one moved is never a guess.
+
+`src/main/volume.ts` speaks `pactl --format=json` through `hostExecFile`, for the reason `gsettings` goes that way: one call that works on both sides of the sandbox on a permission already held, against PulseAudio and PipeWire's Pulse server alike, with nothing parsed out of text meant for a person. Three things about it are decisions:
+
+- **Writes go to `@DEFAULT_SINK@`, never to the sink's name.** A Bluetooth sink is `bluez_output.AA_BB_CC_DD_EE_FF.1` — the address, with underscores, which `redactSecrets` does not match — and `hostExecFile` logs the argv of any command that fails. The name is read to find the description and goes nowhere else.
+- **100% is a ceiling.** pactl has none; past it is software gain, which is distortion delivered into somebody's ears by a held button. The level is the loudest channel, so the ceiling holds with the balance off centre — at the cost of an absolute write flattening that balance, which is the trade a desktop's own slider makes too.
+- **One round at a time, presses added up.** A step is two reads and a write, each tens of milliseconds through `flatpak-spawn`, against a repeat of 90. Steps that arrive during a round are summed and applied by the next one, so the level lands where the presses say however slow the host is, and nothing reads a volume a write in flight is about to change.
+
+The feedback is a [notice](#notices) in the `volume` group, which **updates in place**: `stepNotices` gives a replacement its predecessor's id, so a held D-pad is one card whose number changes rather than a card replaying its entrance ten times a second. Over a game on KDE Wayland that is the shell OSD, which does not take the focus. Every failure — no `pactl`, no default output, a sound server that refuses — is a `volume-unavailable` card with the reason, never a button that does nothing.
 
 #### Which keyboard the person actually has
 
@@ -357,7 +373,7 @@ GNOME may do the opposite and decline to raise the overlay at all, and sway and 
 
 ### What gets announced, and who saw it
 
-Two things so far, and the second needed two watchers because no single one sees all of it.
+Three things so far, and the second needed two watchers because no single one sees all of it.
 
 **Pointer mode** comes off the chord, from `pointer/index.ts` — the one file that sees both backends, which is also where the cross-stop between them lives.
 
@@ -377,6 +393,8 @@ Two details are pinned by tests because both are silent when wrong. One controll
 **Both are seeded, not announced.** A headset already connected and a pad already switched on when the launcher starts have not arrived, and a card for each of them at every boot is the fastest way to teach somebody to ignore the corner of the screen.
 
 **And this is why BlueZ is armed at startup now.** It used to open on the first request from the Devices screen, on the argument that a launcher nobody had taken there should hold no system-bus connection — see `bluetooth/index.ts`, where that argument is now written out against its replacement. A watch that runs only while somebody is looking at the Devices screen is a watch for the one moment nobody needs it. What did *not* change is the part that mattered most: the pairing agent is still registered around a single pairing and unregistered in a `finally`, so the launcher never becomes the desktop's default answer to an incoming pairing.
+
+**The volume** is the third, from `volume.ts` after each round of D-pad steps — see [The D-pad is the volume](#the-d-pad-is-the-volume). It is the one notice raised many times a second, which is what made replacement update a card in place rather than re-enter it.
 
 The floor everywhere here is the same as the overlay's: a machine with no radio, no daemon, or no readable `/dev/input` loses the cards and nothing else. Each failure writes one line and stops.
 

@@ -11,6 +11,7 @@ import {
   type ComposeActionName,
   type PointerActionName
 } from '@shared/pointer'
+import { OSK_NAV_START, stepOskNav, type OskNavState } from '@shared/osk'
 import {
   CHORD_BUTTONS_EVDEV,
   COMPOSE_ACTIONS_EVDEV,
@@ -47,9 +48,18 @@ import { readSystemLayout, toggleSystemKeyboard } from './systemKeyboard'
  * Nothing here may reach the launcher's UI. The pad is being read while a game
  * is on screen, which is exactly the situation the launcher spent a release
  * learning not to act in — see `shouldAcceptInput` in `@shared/input`. The only
- * outputs are the portal's `Notify*` calls and one boolean pushed to the
- * renderer so it knows to stop treating the stick as navigation. There is no
- * path from here to an intent, and none to `gfn:launch`.
+ * outputs are the portal's `Notify*` calls, one boolean pushed to the renderer
+ * so it knows to stop treating the stick as navigation, and a volume step
+ * handed to `volume.ts`, which talks to the sound server and to nothing of
+ * ours. There is no path from here to an intent, and none to `gfn:launch`.
+ *
+ * ── The D-pad is the volume ─────────────────────────────────────────────────
+ *
+ * It was the one control this mode left free — the left stick is the cursor,
+ * the right stick the wheel — and the volume of the headphones is the thing
+ * somebody in a stream most often wants and cannot reach. Up and down only,
+ * with the grid's press-pause-repeat rhythm, and only while the composed
+ * keyboard is closed, since there the D-pad moves the selection.
  *
  * ── The timer, and why it is not always running ─────────────────────────────
  *
@@ -97,6 +107,12 @@ export interface DesktopPointerDeps {
   readonly composeLook: () => ComposeLook
   /** Told to the renderer, so the stick stops driving the grid as well. */
   readonly onMode: (active: boolean) => void
+  /**
+   * One D-pad step. A direction rather than an amount, so how far a step goes
+   * stays in `volume.ts` and this file imports nothing that runs a command.
+   * Fire and forget: it is called from inside the tick.
+   */
+  readonly stepVolume: (direction: 'up' | 'down') => void
 }
 
 export interface DesktopPointer {
@@ -114,6 +130,23 @@ export interface DesktopPointer {
    */
   syncEnabled(): void
   dispose(): void
+}
+
+/** The D-pad's vertical half, which is all the volume reads. */
+export function volumeDirection(reading: PadReading): 'up' | 'down' | null {
+  if (reading.axes.dpadY < 0) return 'up'
+  if (reading.axes.dpadY > 0) return 'down'
+  return null
+}
+
+/**
+ * A held direction, disowned: `stepOskNav` will not move until it changes.
+ *
+ * `repeatAt: null` is the state the stepper documents as "held, but disowned"
+ * — the same adoption `stepPad` applies across a suspension.
+ */
+export function adoptVolume(reading: PadReading): OskNavState {
+  return { direction: volumeDirection(reading), repeatAt: null }
 }
 
 export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
@@ -136,6 +169,8 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
    */
   let heldCompose: readonly ComposeActionName[] = []
   let scrollCarry = 0
+  /** D-pad up and down, repeating while held. See the header. */
+  let volumeNav: OskNavState = OSK_NAV_START
   let ticker: NodeJS.Timeout | null = null
   let lastTick = 0
   let disposed = false
@@ -217,6 +252,9 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
         // Unarmed, so the adoption rule applies again: a shoulder already down
         // as the cursor appears must not count as asking for the keyboard.
         keyboardChord = CHORD_START
+        // Adopted like the buttons: a D-pad already down as the cursor appears
+        // is held, not pressed, and must wait for a fresh press.
+        volumeNav = adoptVolume(sample())
         scrollCarry = 0
         lastTick = Date.now()
         deps.onMode(true)
@@ -246,6 +284,7 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
     }
     held = []
     heldCompose = []
+    volumeNav = OSK_NAV_START
 
     // Before the session goes: both keyboards were raised as part of this mode.
     // KWin's would sit over somebody's screen for the rest of the session, and
@@ -485,16 +524,27 @@ export function armDesktopPointer(deps: DesktopPointerDeps): DesktopPointer {
           if (action === 'send') composer.send()
         }
         composer.step(composeDirection(current.axes), now)
+        // The D-pad is the keyboard's while it is up, and whatever it is doing
+        // when the keyboard closes is a held key there, not a volume press here.
+        volumeNav = adoptVolume(current)
       } else {
         for (const action of edges.up) onAction(action, false)
         for (const action of edges.down) onAction(action, true)
 
         moveCursor(current, dt)
         scrollWheel(current, dt)
+        stepVolume(current, now)
       }
     }
 
     if (!needsTicking()) stopTicking()
+  }
+
+  const stepVolume = (current: PadReading, now: number): void => {
+    const step = stepOskNav(volumeNav, volumeDirection(current), now)
+    volumeNav = step.next
+    if (!step.move || step.next.direction === null) return
+    deps.stepVolume(step.next.direction === 'up' ? 'up' : 'down')
   }
 
   const moveCursor = (current: PadReading, dt: number): void => {

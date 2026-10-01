@@ -10,7 +10,9 @@ import {
   MousePointerBan,
   Smartphone,
   Speaker,
-  Usb
+  Usb,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
 import type { Notice, NoticeIcon } from '@shared/notify'
 import { cn } from '@/lib/utils'
@@ -55,7 +57,11 @@ const NOTICE_ICONS: Record<NoticeIcon, ComponentType<{ className?: string }>> = 
   // Whatever BlueZ would not name — most Low Energy hardware on first sight.
   // A plug rather than a question mark: the card is about something arriving,
   // and "we do not know what this is" is not the part worth drawing.
-  device: Usb
+  device: Usb,
+  // Like the pointer pair, the glyph is the state: the title already carries
+  // the number, and muted versus audible is the part read at a glance.
+  volume: Volume2,
+  'volume-off': VolumeX
 }
 
 /**

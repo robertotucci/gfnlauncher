@@ -60,6 +60,14 @@ export type Announcement =
   | { readonly kind: 'pointer-off' }
   | { readonly kind: 'device-connected'; readonly name: string; readonly device: DeviceKind }
   | { readonly kind: 'device-disconnected'; readonly name: string; readonly device: DeviceKind }
+  | {
+      readonly kind: 'volume'
+      readonly percent: number
+      readonly muted: boolean
+      /** The output's own description, as the sound server names it. */
+      readonly output: string
+    }
+  | { readonly kind: 'volume-unavailable'; readonly reason: string }
 
 /**
  * Which icon to draw, as an id rather than a component.
@@ -79,6 +87,8 @@ export type NoticeIcon =
   | 'computer'
   | 'phone'
   | 'device'
+  | 'volume'
+  | 'volume-off'
 
 export interface Notice {
   /** Monotonic within a run. The React key, and how main finds one again. */
@@ -178,6 +188,22 @@ export function noticeContent(what: Announcement): NoticeContent {
         hint: 'Hold L3 + R3 to bring it back',
         icon: 'pointer-off'
       }
+    case 'volume':
+      return {
+        group: 'volume',
+        // Muted says so instead of a number, because the number is not what is
+        // reaching the ears — a muted output at 40% is silent.
+        title: what.muted ? 'Muted' : `Volume ${what.percent}%`,
+        hint: what.output,
+        icon: what.muted || what.percent === 0 ? 'volume-off' : 'volume'
+      }
+    case 'volume-unavailable':
+      return {
+        group: 'volume',
+        title: 'Volume unavailable',
+        hint: what.reason,
+        icon: 'volume-off'
+      }
     case 'device-connected':
     case 'device-disconnected': {
       const { noun, icon } = DEVICE_NOUNS[what.device]
@@ -221,9 +247,14 @@ export interface NoticeStep {
  *
  * Three rules, and the first is the one that is easy to get wrong:
  *
- * - **A replacement drops its predecessor outright** rather than setting it
- *   `leaving`. Both cards occupy the same coordinates, so an exit playing under
- *   an entrance is two overlapping rectangles sliding in opposite directions.
+ * - **A replacement takes its predecessor's place and its id** rather than
+ *   setting it `leaving`. Both cards occupy the same coordinates, so an exit
+ *   playing under an entrance is two overlapping rectangles sliding in opposite
+ *   directions — and a fresh id is a fresh React key, so the card would replay
+ *   its entrance on every replacement. With the volume stepped from a held
+ *   D-pad that is a card sliding in ten times a second; inheriting the id makes
+ *   it one card whose words change. A predecessor already `leaving` is the
+ *   exception: it is on its way out, and the new notice arrives as itself.
  * - A notice past its `dueAt` turns `leaving` and gets `NOTICE_EXIT_MS` more; a
  *   `leaving` notice past its `dueAt` is gone.
  * - Over `NOTICE_MAX` the **oldest** goes, because the newest is the one the
@@ -236,9 +267,7 @@ export function stepNotices(
 ): NoticeStep {
   const next =
     event.kind === 'show'
-      ? [...live.filter((notice) => notice.group !== event.notice.group), event.notice].slice(
-          -NOTICE_MAX
-        )
+      ? replaceOrAppend(live, event.notice)
       : live
           .map((notice) => {
             if (now < notice.dueAt) return notice
@@ -248,6 +277,18 @@ export function stepNotices(
           .filter((notice): notice is Notice => notice !== null)
 
   return { next, dueAt: earliest(next) }
+}
+
+function replaceOrAppend(live: readonly Notice[], incoming: Notice): Notice[] {
+  const index = live.findIndex((notice) => notice.group === incoming.group && !notice.leaving)
+  if (index !== -1) {
+    return live
+      .map((notice, at) => (at === index ? { ...incoming, id: notice.id } : notice))
+      .filter((notice, at) => at === index || notice.group !== incoming.group)
+  }
+  return [...live.filter((notice) => notice.group !== incoming.group), incoming].slice(
+    -NOTICE_MAX
+  )
 }
 
 function earliest(notices: readonly Notice[]): number | null {

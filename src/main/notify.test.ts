@@ -76,6 +76,13 @@ describe('osdMessage', () => {
     )
   })
 
+  it('says the volume with the icon the shell uses for its own volume popup', () => {
+    expect(osdMessage({ title: 'Volume 45%', hint: 'WH-1000XM4', icon: 'volume' })).toEqual({
+      icon: 'audio-volume-high',
+      text: 'Volume 45% · WH-1000XM4'
+    })
+  })
+
   it('names every glyph with a freedesktop icon rather than a blank', () => {
     const icons = [
       'pointer',
@@ -88,7 +95,9 @@ describe('osdMessage', () => {
       'display',
       'computer',
       'phone',
-      'device'
+      'device',
+      'volume',
+      'volume-off'
     ] as const
 
     for (const icon of icons) {

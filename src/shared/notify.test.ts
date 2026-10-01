@@ -33,7 +33,31 @@ describe('stepNotices', () => {
     // and both cards want the same coordinates.
     const after = show([notice(1)], notice(2))
 
-    expect(after.map((entry) => entry.id)).toEqual([2])
+    expect(after).toHaveLength(1)
+    expect(after[0]?.title).toBe('Notice 2')
+  })
+
+  it('keeps the id of the replaced card, so the surface updates it rather than re-entering', () => {
+    // A held D-pad steps the volume ten times a second. A fresh id is a fresh
+    // React key, which replays the slide-in on every step.
+    const after = show([notice(1)], notice(2, { title: 'Volume 45%' }))
+
+    expect(after.map((entry) => entry.id)).toEqual([1])
+    expect(after[0]?.title).toBe('Volume 45%')
+  })
+
+  it('keeps the place of the replaced card in the stack', () => {
+    const live = [notice(1, { group: 'volume' }), notice(2, { group: 'update' })]
+
+    const after = show(live, notice(3, { group: 'volume', title: 'Volume 50%' }))
+
+    expect(after.map((entry) => entry.title)).toEqual(['Volume 50%', 'Notice 2'])
+  })
+
+  it('lets a card already leaving go, and brings the new one in as itself', () => {
+    const after = show([notice(1, { leaving: true })], notice(2))
+
+    expect(after.map((entry) => [entry.id, entry.leaving])).toEqual([[2, false]])
   })
 
   it('does not leave the replaced notice playing an exit under the new one', () => {
@@ -118,6 +142,49 @@ describe('noticeContent — pointer mode', () => {
   it('draws a different icon for each, since there is no name on the card', () => {
     expect(noticeContent({ kind: 'pointer-on' }).icon).not.toBe(
       noticeContent({ kind: 'pointer-off' }).icon
+    )
+  })
+})
+
+describe('noticeContent — volume', () => {
+  const volume = (percent: number, muted = false): Announcement => ({
+    kind: 'volume',
+    percent,
+    muted,
+    output: 'WH-1000XM4'
+  })
+
+  it('puts the level in the title and the output in the hint', () => {
+    const content = noticeContent(volume(45))
+
+    expect(content.title).toBe('Volume 45%')
+    expect(content.hint).toBe('WH-1000XM4')
+    expect(content.icon).toBe('volume')
+  })
+
+  it('says muted rather than a number nobody is hearing', () => {
+    const content = noticeContent(volume(40, true))
+
+    expect(content.title).toBe('Muted')
+    expect(content.icon).toBe('volume-off')
+  })
+
+  it('draws silence at zero even when not muted', () => {
+    expect(noticeContent(volume(0)).icon).toBe('volume-off')
+  })
+
+  it('puts a failure in the same group, so it replaces the level rather than stacking', () => {
+    const failed = noticeContent({ kind: 'volume-unavailable', reason: 'No audio output found' })
+
+    expect(failed.group).toBe(noticeContent(volume(45)).group)
+    expect(failed.title).toBe('Volume unavailable')
+    expect(failed.hint).toBe('No audio output found')
+  })
+
+  it('never shares a group with a device card', () => {
+    // Headphones connecting and the first volume step are live at once.
+    expect(noticeContent(volume(45)).group).not.toBe(
+      noticeContent({ kind: 'device-connected', name: 'volume', device: 'headphones' }).group
     )
   })
 })

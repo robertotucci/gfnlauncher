@@ -13,6 +13,7 @@ import {
 } from '@shared/theme'
 import type { Settings } from '@shared/types'
 import { notify } from '../notify'
+import { VOLUME_STEP, adjustVolume } from '../volume'
 import { armDesktopPointer, type DesktopPointer } from './desktop'
 
 /**
@@ -360,7 +361,8 @@ export function armPointerMode(
       // and those are exactly the ones the notice has to reach. Which surface
       // draws it is `notify.ts`'s decision, not this one's.
       notify({ kind: modeActive ? 'pointer-on' : 'pointer-off' })
-    }
+    },
+    stepVolume: (direction) => adjustVolume(direction === 'up' ? VOLUME_STEP : -VOLUME_STEP)
   })
 }
 
