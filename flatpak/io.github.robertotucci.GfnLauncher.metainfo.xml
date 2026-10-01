@@ -115,6 +115,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.7" date="2026-10-01">
+      <description>
+        <p>The volume of your headphones can be turned up and down from the controller while you play.</p>
+        <ul>
+          <li>With the cursor up, the D-pad up and down change the volume of the output the game plays on, five points a press, with a card naming the level and the output; it stops at 100% and turning it up unmutes</li>
+          <li>A notice that replaces another now updates it in place instead of sliding in again</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.7</url>
+    </release>
     <release version="0.1.6" date="2026-10-01">
       <description>
         <p>Text typed into a game arrives in the order you wrote it, notices stop taking the keyboard from the game on KDE, and Bluetooth comes back on by itself.</p>

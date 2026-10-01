@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [0.1.7] - 2026-10-01
+
+### Added
+
+- **You can turn the volume up and down from the controller while you play.** With the cursor up (hold L3 + R3), the D-pad up and down change the volume of the output the game is playing on, which is your Bluetooth headphones when they are connected. Each press moves it five points, and holding repeats. A card shows the level and which output moved; on KDE Plasma it is the shell's own volume popup, which does not take the game out of fullscreen. The volume stops at 100%, and turning it up from muted unmutes. It needs *Cursor outside the launcher* switched on in Settings, and `pactl`, which every PulseAudio and PipeWire desktop has.
+
+### Changed
+
+- **A notice that replaces another now updates it in place** instead of sliding in again, so toggling the cursor or stepping the volume shows one card whose words change.
+
 ## [0.1.6] - 2026-10-01
 
 ### Added
