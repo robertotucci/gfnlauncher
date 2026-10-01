@@ -317,6 +317,12 @@ describe('describeBluezError', () => {
     expect(message).not.toContain('adapter')
   })
 
+  it('names the rfkill block and the command that lifts it', () => {
+    expect(describeBluezError('org.bluez.Error.Blocked', 'Blocked through rfkill')).toContain(
+      'rfkill unblock bluetooth'
+    )
+  })
+
   it('turns the pairing failures into something a person can act on', () => {
     expect(describeBluezError('org.bluez.Error.AuthenticationTimeout', 'x')).toContain(
       'pairing mode'

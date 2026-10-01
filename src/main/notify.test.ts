@@ -61,3 +61,38 @@ describe('noticeBounds', () => {
     expect(box.x).toBeGreaterThanOrEqual(small.x)
   })
 })
+
+const { osdMessage } = await import('./notify')
+
+describe('osdMessage', () => {
+  it('puts the title first and the hint after it, on one line', () => {
+    expect(osdMessage({ title: 'Pointer on', hint: 'Hold L3 + R3 to put it away', icon: 'pointer' }))
+      .toEqual({ icon: 'input-mouse', text: 'Pointer on · Hold L3 + R3 to put it away' })
+  })
+
+  it('is the title alone when there is no hint', () => {
+    expect(osdMessage({ title: 'Controller connected', hint: null, icon: 'gamepad' }).text).toBe(
+      'Controller connected'
+    )
+  })
+
+  it('names every glyph with a freedesktop icon rather than a blank', () => {
+    const icons = [
+      'pointer',
+      'pointer-off',
+      'gamepad',
+      'keyboard',
+      'mouse',
+      'headphones',
+      'speaker',
+      'display',
+      'computer',
+      'phone',
+      'device'
+    ] as const
+
+    for (const icon of icons) {
+      expect(osdMessage({ title: 'x', hint: null, icon }).icon).toMatch(/^[a-z-]+$/)
+    }
+  })
+})

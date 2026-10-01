@@ -1,8 +1,10 @@
+import { powerMonitor } from 'electron'
 import type { BluetoothPairingRequest, BluetoothResult, BluetoothSnapshot } from '@shared/types'
 import type { BluetoothAction } from '@shared/bluetooth'
 import { createPairingAgent, type PairingAgent } from './agent'
 import { errorName, errorText, openBluez, PAIR_TIMEOUT_MS, type BluezBus } from './bluez'
 import { notify } from '../notify'
+import { unblockBluetooth } from './rfkill'
 import {
   ADAPTER_IFACE,
   DEVICE_IFACE,
@@ -48,6 +50,23 @@ import {
  * logs it and is left alone, because the retry is still driven by requests.
  * And nothing about the mirror, the snapshot or any of the actions moved: the
  * screen still reads the same tree, it is simply already warm when it opens.
+ *
+ * ── Why the launcher switches the radio on ──────────────────────────────────
+ *
+ * The pad in that room is a Bluetooth pad. A radio that is off when the
+ * launcher comes up — Plasma restoring the switch as it was left, rfkill
+ * restored by `systemd-rfkill`, an adapter that came back from a suspend
+ * powered down — is therefore a launcher with no input at all, and the Devices
+ * screen's own switch is out of reach for the same reason. So for a short
+ * window after each of the moments that happens (startup, resume, the adapter
+ * reappearing) the launcher *wants* the radio on, and pursues it: lifting a soft
+ * rfkill block if there is one, then `Powered = true`. See `wantRadio`.
+ *
+ * The window is the restraint. Outside it, a radio switched off from the
+ * desktop stays off; inside it, something switching it off again — the desktop
+ * restoring its saved state a moment after us, which is a race at login — is
+ * answered once more. Switching it off from the Devices screen ends the wish
+ * for the rest of the run.
  */
 
 /** How long a scan runs before stopping itself. */
@@ -61,6 +80,23 @@ const SCAN_TIMEOUT_MS = 60_000
  * up. The failure does not change in that time and neither does the answer.
  */
 const RETRY_COOLDOWN_MS = 5_000
+
+/**
+ * How long the launcher goes on wanting the radio on after a moment that can
+ * leave it off. Long enough to outlast the desktop restoring its own saved
+ * state at login, short enough that it is not a standing fight with the
+ * desktop's switch.
+ */
+const RADIO_WISH_MS = 30_000
+
+/**
+ * How often a startup that could not reach BlueZ tries again, and for how long.
+ * bluetoothd and the session both start at boot and nothing orders them, so
+ * "not running yet" at the first second is the ordinary race rather than a
+ * machine without a daemon.
+ */
+const STARTUP_RETRY_MS = RETRY_COOLDOWN_MS
+const STARTUP_RETRY_FOR_MS = 60_000
 
 const EMPTY_TREE: BluezTree = new Map()
 
@@ -79,6 +115,14 @@ let answerRequest: ((accepted: boolean) => void) | null = null
 let pairing = false
 let error: string | null = null
 const busy = new Set<string>()
+
+/** Until when the radio is wanted on. 0 is "not wanted". See `wantRadio`. */
+let radioWantedUntil = 0
+/** Set by switching the radio off from the Devices screen; ends every wish. */
+let radioOffByUser = false
+let radioInFlight = false
+/** One unblock per wish: a write that did not lift the block will not on retry. */
+let rfkillTried = false
 
 function snapshot(): BluetoothSnapshot {
   return buildSnapshot(tree, { scanning, request, busy, error })
@@ -126,6 +170,14 @@ function describe(cause: unknown): string {
 function forget(reason: string | null): void {
   bus = null
   agent = null
+  emptyMirror(reason)
+}
+
+/**
+ * The half of `forget` that a bluetoothd restart needs too, with the bus and
+ * the agent left alone: the connection is fine, only the daemon behind it went.
+ */
+function emptyMirror(reason: string | null): void {
   tree = EMPTY_TREE
   // Cleared rather than diffed against the empty tree: the bus going is not
   // every device in the room switching off, and a row of "disconnected" cards
@@ -145,16 +197,34 @@ function forget(reason: string | null): void {
 async function open(): Promise<BluezBus> {
   const connection = await openBluez({
     onInterfacesAdded: (path, interfaces) => {
-      tree = withInterfaces(tree, path, readInterfaces(interfaces))
+      const added = readInterfaces(interfaces)
+      tree = withInterfaces(tree, path, added)
       announce()
+      // An adapter appearing is one of the moments a radio comes up off — a
+      // controller re-registered after a suspend, a dongle plugged in,
+      // bluetoothd restarting.
+      if (added[ADAPTER_IFACE]) wantRadio('the adapter appeared')
+      else pursueRadio()
     },
     onInterfacesRemoved: (path, names) => {
       tree = withoutInterfaces(tree, path, names)
       announce()
     },
     onPropertiesChanged: (path, iface, changed, invalidated) => {
+      const before = iface === ADAPTER_IFACE ? radioState() : null
       tree = withProperties(tree, path, iface, readDict(changed), invalidated)
       announce()
+      if (before !== null) noteRadio(before)
+      pursueRadio()
+    },
+    onOwnerChanged: (present) => {
+      if (!present) {
+        console.warn('Bluetooth: BlueZ stopped; forgetting what it had reported.')
+        emptyMirror('BlueZ stopped running. It is usually restarted on its own within seconds.')
+        return
+      }
+      console.info('Bluetooth: BlueZ is running again; reading its tree afresh.')
+      void reload()
     },
     onLost: (reason) => {
       console.warn(`Bluetooth: the system bus connection was lost (${reason}).`)
@@ -181,6 +251,164 @@ async function open(): Promise<BluezBus> {
   )
 
   return connection
+}
+
+// ── The radio ───────────────────────────────────────────────────────────────
+
+/** `Powered` and `PowerState` off the first adapter, for a log line and a test. */
+function radioState(): { powered: boolean; state: string | null } {
+  const properties = findAdapter(tree)?.properties
+  const state = properties?.['PowerState']
+  return {
+    powered: properties?.['Powered'] === true,
+    state: typeof state === 'string' ? state : null
+  }
+}
+
+/**
+ * Says when the radio went off and the launcher did not ask for it.
+ *
+ * The diagnostic this bug never had: "it was off when I sat down" is a picture,
+ * and the line this writes is what says whether it went off at login, at
+ * resume, or an hour into the evening.
+ */
+function noteRadio(before: { powered: boolean; state: string | null }): void {
+  const after = radioState()
+  if (before.powered === after.powered && before.state === after.state) return
+  console.info(
+    `Bluetooth: adapter is now ${after.powered ? 'on' : 'off'}` +
+      (after.state ? ` (${after.state})` : '')
+  )
+}
+
+/**
+ * Starts wanting the radio on for `RADIO_WISH_MS`. See the header.
+ *
+ * Idempotent and cheap, because it is called from every moment that might
+ * need it rather than from one place that knows: the work is in
+ * `pursueRadio`, which does nothing at all once the radio is on.
+ */
+function wantRadio(why: string): void {
+  if (radioOffByUser) return
+  if (Date.now() >= radioWantedUntil) {
+    rfkillTried = false
+    console.info(`Bluetooth: making sure the radio is on (${why}).`)
+  }
+  radioWantedUntil = Date.now() + RADIO_WISH_MS
+  pursueRadio()
+}
+
+/**
+ * One step towards a powered radio, from whatever state it is in now.
+ *
+ * Called after every signal while a wish is live, which is how the steps chain
+ * without a timer: lifting rfkill moves `PowerState` from `off-blocked`, that
+ * change arrives as a signal, and the next call sets `Powered`. The `-enabling`
+ * and `-disabling` states are transitions somebody else started, and are left
+ * to finish before anything is asked.
+ */
+function pursueRadio(): void {
+  if (radioOffByUser || Date.now() >= radioWantedUntil) return
+  if (!bus || radioInFlight) return
+
+  const adapter = findAdapter(tree)
+  // No adapter yet: the wish waits for `InterfacesAdded`.
+  if (!adapter) return
+
+  const { powered, state } = radioState()
+  if (powered) return
+  if (state === 'off-enabling' || state === 'on-disabling') return
+
+  const connection = bus
+  radioInFlight = true
+  void powerOn(connection, adapter.path, state === 'off-blocked')
+    .catch((cause: unknown) => {
+      console.warn(`Bluetooth: could not switch the radio on — ${describe(cause)}`)
+      // Not retried within this wish: the answer is not going to change in the
+      // next signal, and asking on each one would be a loop.
+      radioWantedUntil = 0
+    })
+    .finally(() => {
+      radioInFlight = false
+    })
+}
+
+/**
+ * Lifts a soft block if BlueZ says there is one, then powers the adapter.
+ *
+ * `Blocked` from the `Set` is handled as well as `off-blocked` from the read,
+ * because a BlueZ older than `PowerState` (5.64) only says it the first way.
+ */
+async function powerOn(connection: BluezBus, path: string, blocked: boolean): Promise<void> {
+  if (blocked) {
+    await liftRfkill()
+    // The state change it causes is a signal, and that signal is the next step.
+    return
+  }
+
+  try {
+    await connection.setProperty(path, ADAPTER_IFACE, 'Powered', 'b', true)
+  } catch (cause) {
+    if (errorName(cause) !== 'org.bluez.Error.Blocked') throw cause
+    await liftRfkill()
+    await setPoweredAfterUnblock(connection, path)
+  }
+  console.info('Bluetooth: switched the radio on.')
+}
+
+/**
+ * `Powered = true` right after an unblock, on a BlueZ that cannot say when the
+ * unblock has landed. bluetoothd hears about it through its own rfkill read, a
+ * moment after our write returns, and until then it still answers `Blocked`.
+ */
+async function setPoweredAfterUnblock(connection: BluezBus, path: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await connection.setProperty(path, ADAPTER_IFACE, 'Powered', 'b', true)
+      return
+    } catch (cause) {
+      if (errorName(cause) !== 'org.bluez.Error.Blocked' || attempt >= 5) throw cause
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    }
+  }
+}
+
+async function liftRfkill(): Promise<void> {
+  if (rfkillTried) {
+    throw Object.assign(new Error('Blocked through rfkill'), { name: 'org.bluez.Error.Blocked' })
+  }
+  rfkillTried = true
+  try {
+    await unblockBluetooth()
+  } catch (cause) {
+    console.warn(`Bluetooth: could not lift the rfkill block — ${String(cause)}`)
+    throw Object.assign(new Error('Blocked through rfkill'), { name: 'org.bluez.Error.Blocked' })
+  }
+  console.info('Bluetooth: lifted the rfkill soft block.')
+}
+
+/**
+ * Reads the whole tree again after bluetoothd came back.
+ *
+ * Seeded rather than announced, for the reason the first read is: devices the
+ * new daemon already holds have not just arrived. Signals that land while this
+ * is in flight are applied to the old tree and then superseded by the reply,
+ * which is at least as new as they are — the connection delivers in order.
+ */
+async function reload(): Promise<void> {
+  const connection = bus
+  if (!connection) return
+  try {
+    const fresh = readManagedObjects(await connection.getManagedObjects())
+    if (bus !== connection) return
+    tree = fresh
+    connected = connectedDevices(tree)
+    error = null
+  } catch (cause) {
+    console.warn(`Bluetooth: could not read BlueZ's tree after its restart — ${describe(cause)}`)
+    return
+  }
+  wantRadio('BlueZ restarted')
 }
 
 /**
@@ -265,15 +493,37 @@ function announce(): void {
 }
 
 /**
- * Opens the connection at startup so the launcher can see a device arrive.
+ * Opens the connection at startup so the launcher can see a device arrive, and
+ * makes sure the radio is on.
  *
  * Fire and forget, and a failure here is the ordinary case rather than a fault:
  * plenty of machines have no radio and some have no daemon. `ensure()` already
- * logs why and sets the cooldown, so nothing is retried on a timer — the next
- * attempt is whenever somebody opens the Devices screen, exactly as before.
+ * logs why and sets the cooldown. The one retry on a timer is the boot race —
+ * bluetoothd and an autostarted launcher come up in no particular order — and
+ * it gives up after a minute; past that the next attempt is whenever somebody
+ * opens the Devices screen, exactly as before.
+ *
+ * Resume is the other moment a radio comes back off, so it is watched here too.
  */
 export function armBluetoothWatch(): void {
-  void ensure()
+  const startedAt = Date.now()
+  const attempt = (): void => {
+    void ensure().then((connection) => {
+      if (connection) {
+        wantRadio('the launcher started')
+        return
+      }
+      if (Date.now() - startedAt >= STARTUP_RETRY_FOR_MS) return
+      setTimeout(attempt, STARTUP_RETRY_MS).unref()
+    })
+  }
+  attempt()
+
+  powerMonitor.on('resume', () => {
+    void ensure().then((connection) => {
+      if (connection) wantRadio('the machine resumed')
+    })
+  })
 }
 
 // ── Reading ─────────────────────────────────────────────────────────────────
@@ -380,12 +630,27 @@ export async function setPowered(on: boolean): Promise<BluetoothResult> {
   const path = adapterPath()
   if (!path) return failed('This machine has no Bluetooth adapter.')
 
+  // Somebody choosing, from this screen, is the end of the launcher choosing
+  // for them — in both directions, so an "on" here does not leave a wish behind
+  // that would answer the desktop's switch for the next thirty seconds.
+  radioOffByUser = !on
+  radioWantedUntil = 0
+
   // Switching the radio off with a scan running leaves BlueZ holding our
   // discovery reference against an adapter that cannot answer it.
   if (!on && scanning) await stopDiscovery(connection, path)
 
   try {
-    await connection.setProperty(path, ADAPTER_IFACE, 'Powered', 'b', on)
+    if (on) {
+      rfkillTried = false
+      const blocked = radioState().state === 'off-blocked'
+      // The unblock is one step and `Powered` is the next, taken when the
+      // signal for the first arrives — which needs a wish to be live for it.
+      if (blocked) radioWantedUntil = Date.now() + RADIO_WISH_MS
+      await powerOn(connection, path, blocked)
+    } else {
+      await connection.setProperty(path, ADAPTER_IFACE, 'Powered', 'b', false)
+    }
   } catch (cause) {
     return failed(describe(cause))
   }

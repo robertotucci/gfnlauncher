@@ -33,6 +33,7 @@ export const BLUEZ = 'org.bluez'
 const ROOT = '/'
 const OBJECT_MANAGER = 'org.freedesktop.DBus.ObjectManager'
 const PROPERTIES = 'org.freedesktop.DBus.Properties'
+const BUS_DAEMON = 'org.freedesktop.DBus'
 
 /**
  * How long an ordinary call may take.
@@ -95,6 +96,15 @@ export interface BluezSignals {
     changed: unknown,
     invalidated: readonly string[]
   ): void
+  /**
+   * bluetoothd went away (`false`) or came back (`true`) on a bus that stayed up.
+   *
+   * A daemon exiting emits no `InterfacesRemoved` — it is simply gone, and a
+   * mirror that heard nothing would go on describing a tree that no longer
+   * exists. Its return is a fresh tree under a new unique name, which only a
+   * new `GetManagedObjects` describes whole.
+   */
+  onOwnerChanged(present: boolean): void
   /**
    * The connection died under us.
    *
@@ -163,6 +173,11 @@ export async function openBluez(signals: BluezSignals): Promise<BluezBus> {
 
   const onMessage = (message: DBusMessage): void => {
     const body = message.body ?? []
+    if (message.interface === BUS_DAEMON && message.member === 'NameOwnerChanged') {
+      const present = bluezOwnerChange(body)
+      if (present !== null) signals.onOwnerChanged(present)
+      return
+    }
     if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesAdded') {
       const [path, interfaces] = body
       if (typeof path === 'string') signals.onInterfacesAdded(path, interfaces)
@@ -204,6 +219,12 @@ export async function openBluez(signals: BluezSignals): Promise<BluezBus> {
   await addMatch(
     `type='signal',sender='${BLUEZ}',interface='${PROPERTIES}',member='PropertiesChanged'`
   )
+  // The two above survive a restart; the tree they amend does not. This is what
+  // says it happened. xdg-dbus-proxy forwards it for any name the sandbox may
+  // talk to, so it holds inside the Flatpak too.
+  await addMatch(
+    `type='signal',sender='${BUS_DAEMON}',interface='${BUS_DAEMON}',member='NameOwnerChanged',arg0='${BLUEZ}'`
+  )
 
   return {
     invoke,
@@ -229,6 +250,19 @@ export async function openBluez(signals: BluezSignals): Promise<BluezBus> {
       bus.connection.end()
     }
   }
+}
+
+/**
+ * A `NameOwnerChanged` body, as "BlueZ is there now" or "it is not".
+ *
+ * `null` for anything about another name — the match rule already filters on
+ * `arg0`, and this is the half that does not depend on the bus honouring it.
+ * The new owner is the third argument, and empty means nobody.
+ */
+export function bluezOwnerChange(body: readonly unknown[]): boolean | null {
+  const [name, , owner] = body
+  if (name !== BLUEZ) return null
+  return typeof owner === 'string' && owner.length > 0
 }
 
 /** The D-Bus error name of a rejection, when it carries one. */

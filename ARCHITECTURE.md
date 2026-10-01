@@ -314,7 +314,7 @@ Pointer mode is the launcher's most silent feature. The chord flips a mode read 
 | The launcher is | Drawn by |
 | --- | --- |
 | the thing on screen | its own renderer, `NoticeStack` in `App.tsx` |
-| `handedOff` or minimised — a game, the sign-in window, the desktop | the overlay window |
+| `handedOff` or minimised — a game, the sign-in window, the desktop | the overlay window — or, on Wayland, the shell's OSD when there is one ([why](#the-focus-cost-measured)) |
 
 **That table is the cross-desktop story.** The common case creates no window, touches no compositor and behaves identically everywhere. Only the second row depends on the machine, and it is the row pointer mode exists for.
 
@@ -345,7 +345,11 @@ KDE Wayland **takes the focus**, which is what this repository already recorded 
 20:36:00.338  Launcher gained focus
 ```
 
-3.58 s — the notice's life exactly — and the focus comes back on its own when the window hides, with no handback delay of the kind `compose.ts` needs. The visible cost is that KWin drops the window underneath out of the fullscreen layer for those three and a half seconds, so a panel reappears over it. That was fatal for a keyboard, whose entire job is to be somewhere a keystroke is not going; for a card that nothing depends on it is a blip, and it is accepted. The same measurement shows **no focus churn at all** while the launcher is drawing its own notices, which is the common case.
+3.58 s — the notice's life exactly — and the focus comes back on its own when the window hides, with no handback delay of the kind `compose.ts` needs. The visible cost is that KWin drops the window underneath out of the fullscreen layer for those three and a half seconds, so a panel reappears over it. The same measurement shows **no focus churn at all** while the launcher is drawing its own notices, which is the common case.
+
+**That was accepted as a blip, and over a stream it is not one.** The window underneath is the game, and the game is exactly what pointer mode exists to type into — so a card announcing the cursor took the keyboard away from the thing the cursor was for, every time. Nothing a client can ask for on Wayland prevents it: `focusable` and `showInactive()` are not protocol, a KWin script cannot clear `wantsInput`, and an *unfocused* window sits in `AboveLayer`, which is below an active fullscreen window — so on KWin "visible over the game" and "focused" are the same request.
+
+**So over another window on Wayland, the shell says it instead.** `org.kde.osdService.showText` is the surface Plasma's volume and keyboard-layout popups use: an OSD role, stacked above fullscreen and never focusable. Not `org.freedesktop.Notifications` — a Do Not Disturb left on swallows those, and on the machine this was written on it was on for the year. `osdMessage` folds a notice into the OSD's one icon name and one line, and is tested. It is a capability probe, not a branch on `DESKTOP.id`: the call is made, a session with no such service answers `ServiceUnknown`, and the overlay comes in as before, the answer cached for the run. While the first answer is in flight the overlay is held back rather than shown just in case — showing it is the theft this exists to avoid. X11 keeps the overlay, which costs no focus there. The Flatpak needs `--talk-name=org.kde.plasmashell` for it.
 
 GNOME may do the opposite and decline to raise the overlay at all, and sway and Hyprland stack a fullscreen surface by their own rules. **All of it degrades to "no notice."** Nothing waits on one, nothing is gated by one, and it cannot take the pad or the cursor away — which is what makes it acceptable to ship one window across compositors that cannot all be tested here, and the property to preserve if this grows.
 
@@ -742,6 +746,8 @@ The other half of that fix is that **the Settings toggle now applies immediately
 
 **The connection opens at startup rather than at the first request, and it did not always.** [Notices](#notices) has the reason and the reasoning: something outside the Devices screen came to need the answer, and a watch that runs only while somebody is looking at that screen is a watch for the one moment nobody needs it. The mirror, the snapshot and every action are unchanged — the screen is simply already warm when it opens — and a machine with no daemon still fails once, logs it, and is left alone.
 
+**A bluetoothd restart empties it, and its return refills it.** The match rules name `org.bluez` and the bus resolves that to whichever process owns it, so signals survive a restart — but a daemon exiting emits no `InterfacesRemoved`, and a mirror that heard nothing would go on listing an adapter and devices that no longer exist. So `NameOwnerChanged` for `org.bluez` is watched too: an empty new owner clears the mirror on a bus that is still up, without a card for each device (the daemon stopping is not the hardware leaving), and a new owner means a fresh `GetManagedObjects`, seeded rather than announced, followed by the same radio check as startup. `bluezOwnerChange` reads the signal and is tested.
+
 Three things about the fold are pinned by `model.test.ts` because the obvious implementation gets them wrong:
 
 - **`InterfacesAdded` merges, it does not replace.** BlueZ announces `org.bluez.Battery1` on a path that already carries `org.bluez.Device1`, and taking the announcement as the whole object drops the device it belongs to.
@@ -759,6 +765,14 @@ It is registered immediately before `Device1.Pair` and unregistered in a `finall
 The capability is **`DisplayYesNo`**, which covers the three cases a television can answer: just-works pairing, which BlueZ completes without asking; numeric comparison, which is six digits and an A; and a passkey to type on the *other* device, which is a number to read out. It does not cover `RequestPinCode` and `RequestPasskey`, which want a code typed *into this machine* — those are refused with a sentence saying so. `NoInputNoOutput` would have made them unreachable by forcing every pairing down the just-works path, and would have quietly weakened the ones that could have been confirmed properly.
 
 Pairing is three steps and only the first can fail it: `Pair` is the exchange, `Trusted` is what lets the device reconnect on its own afterwards — without it a pad pairs, works for one evening and is ignored at the next boot — and `Connect` is the convenience. A pairing that completed and then did not connect **is paired**, and the row saying "Paired, not connected" is both true and something A can act on.
+
+### Switching the radio on
+
+The reference pad is a Bluetooth pad, so a radio that is off when the launcher comes up is a launcher with **no input at all** — and the Devices screen's own switch is unreachable for the same reason. Three things leave it off and none of them is a fault: Plasma restoring its switch as it was left at logout, a soft rfkill block (which is what Plasma's switch sets) restored at boot by `systemd-rfkill`, and an adapter that comes back from a suspend powered down.
+
+So for `RADIO_WISH_MS` after each moment that can do that — startup, `powerMonitor` resume, an `Adapter1` appearing — the launcher *wants* the radio on, and `pursueRadio` takes one step towards it after every signal: lift a soft rfkill block if `PowerState` says `off-blocked` (or `Set` answers `Blocked`, on a BlueZ older than `PowerState`), then `Powered = true`. The steps chain through signals rather than a timer. The rfkill half is eight bytes written to `/dev/rfkill` — `rfkillUnblockEvent`, tested — which is what `rfkill unblock bluetooth` does, as the same seat user, through the `--device=all` the pad already needs. A hard block is never touched.
+
+**The window is the restraint.** Outside it, a radio switched off from the desktop stays off; inside it, the desktop switching it off again — restoring its saved state a moment after us, a race at login — is answered once more. Switching it off from the Devices screen ends every wish for the rest of the run. Startup also retries reaching BlueZ every five seconds for a minute, because bluetoothd and an autostarted launcher come up in no particular order. Every change of the adapter's power is logged, so the next "it was off when I sat down" says when it went off.
 
 ### The boundary
 

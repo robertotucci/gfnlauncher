@@ -172,9 +172,9 @@ function start(): void {
     disarmInputWatch()
     // Same argument one bus over: a discovery reference this process still
     // holds is a radio the next application finds busy, and a pairing agent
-    // left exported would go on answering for a launcher that is gone. A no-op
-    // unless somebody opened the Devices screen — nothing here is armed at
-    // startup.
+    // left exported would go on answering for a launcher that is gone. The
+    // connection itself has been open since startup, for the notices and for
+    // switching the radio on.
     disarmBluetooth()
   })
 

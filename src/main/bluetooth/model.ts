@@ -459,6 +459,11 @@ export function describeBluezError(name: string | undefined, fallback: string): 
         `flatpak override --user --system-talk-name=org.bluez ${OWN_APP_ID}`
       )
 
+    case 'org.bluez.Error.Blocked':
+      return (
+        'Bluetooth is switched off at the system level (rfkill) and the launcher could not ' +
+        'switch it back on. Run: rfkill unblock bluetooth'
+      )
     case 'org.bluez.Error.AlreadyExists':
       return 'That device is already paired.'
     case 'org.bluez.Error.AuthenticationCanceled':

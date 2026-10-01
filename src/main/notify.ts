@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { sessionBus } from '@homebridge/dbus-native'
 import { BrowserWindow, screen, type Rectangle } from 'electron'
 import { IPC } from '@shared/ipc'
 import {
@@ -6,10 +7,13 @@ import {
   NOTICE_MS,
   type Announcement,
   type Notice,
+  type NoticeContent,
+  type NoticeIcon,
   noticeContent,
   stepNotices
 } from '@shared/notify'
 import { scaleValue } from '@shared/theme'
+import { withBus } from './dbus'
 import { DESKTOP } from './desktop'
 import { screenOwnership, watchScreenOwnership } from './screen'
 import { getSettings } from './settings'
@@ -43,6 +47,23 @@ import { applyUiScale } from './uiScale'
  * fourth preload, which CONTRIBUTING.md names as the standing risk here: a
  * sandboxed preload's `require` resolves almost nothing, so two entries sharing
  * one runtime import become a chunk that kills *every* preload at load.
+ *
+ * ── Except over a game on Wayland, where the shell says it instead ─────────
+ *
+ * A Wayland overlay costs the focus — KWin activates it on every reveal, and
+ * the game underneath loses its keyboard and drops out of the fullscreen layer
+ * for the card's whole life. That was once accepted as a blip; over a stream
+ * it is not one, because the game *is* the thing being typed into. So on that
+ * route the first thing asked is the desktop shell's own on-screen display —
+ * Plasma's `org.kde.osdService`, the surface the volume and keyboard-layout
+ * popups use — which sits above a fullscreen window by role and is never
+ * focusable. Not `org.freedesktop.Notifications`: a Do Not Disturb that is left
+ * on swallows every one of those, and an OSD is not a notification.
+ *
+ * It is a capability probe rather than a branch on `DESKTOP.id`: the call is
+ * made, and a session without that service answers `ServiceUnknown` and falls
+ * through to the overlay exactly as before. The answer is kept for the run, so
+ * that fall-through costs one round trip once.
  *
  * ── Everything here degrades to "no notice" ─────────────────────────────────
  *
@@ -118,6 +139,49 @@ function placeable(): boolean {
   return DESKTOP.session === 'x11'
 }
 
+/**
+ * The shell OSD's address, and what each glyph is called in an icon theme.
+ *
+ * Freedesktop names that Breeze and Adwaita both carry, so the icon is never
+ * the blank square a theme draws for a name it lacks.
+ */
+const OSD = {
+  destination: 'org.kde.plasmashell',
+  path: '/org/kde/osdService',
+  iface: 'org.kde.osdService'
+} as const
+
+const OSD_ICONS: Record<NoticeIcon, string> = {
+  pointer: 'input-mouse',
+  'pointer-off': 'input-mouse',
+  gamepad: 'input-gaming',
+  keyboard: 'input-keyboard',
+  mouse: 'input-mouse',
+  headphones: 'audio-headphones',
+  speaker: 'audio-speakers',
+  display: 'video-display',
+  computer: 'computer',
+  phone: 'phone',
+  device: 'preferences-desktop-peripherals'
+}
+
+/**
+ * A notice as the shell OSD takes it: one icon name and one line.
+ *
+ * Pure for the reason `noticeContent` is — this is wording read from a sofa.
+ * The title stays first, because the OSD ellipsises the end of a long line and
+ * the title is the part that is the sentence.
+ */
+export function osdMessage(content: Pick<NoticeContent, 'title' | 'hint' | 'icon'>): {
+  icon: string
+  text: string
+} {
+  return {
+    icon: OSD_ICONS[content.icon],
+    text: content.hint ? `${content.title} · ${content.hint}` : content.title
+  }
+}
+
 let getMainWindow: () => BrowserWindow | null = () => null
 let live: Notice[] = []
 let nextId = 1
@@ -128,6 +192,11 @@ let overlayReady = false
 let overlayShown = false
 /** The interface scale, cached because the reveal path cannot await a read. */
 let zoom = 1
+/**
+ * Whether the shell OSD answered. `null` until the first notice that needed
+ * it, and then fixed for the run — see the header.
+ */
+let osd: boolean | null = null
 
 export function armNotices(getWindow: () => BrowserWindow | null): void {
   getMainWindow = getWindow
@@ -156,6 +225,45 @@ export function notify(what: Announcement): void {
   }
 
   apply(stepNotices(live, { kind: 'show', notice }, Date.now()))
+  if (overlaid() && !placeable() && osd !== false) void sayOnOsd(notice)
+}
+
+function overlaid(): boolean {
+  const { minimised, handedOff } = screenOwnership()
+  return minimised || handedOff
+}
+
+/**
+ * Hands one notice to the shell's OSD, and settles which route this run takes.
+ *
+ * Only new notices come through here, never the leftovers of one the launcher
+ * was drawing when a game started: those are mid-life, and repeating them on a
+ * surface that has its own clock would show them twice as long as anything
+ * else. A failure repaints, which is what brings the overlay in as the fallback
+ * for whatever is still live.
+ */
+async function sayOnOsd(notice: Notice): Promise<void> {
+  const { icon, text } = osdMessage(notice)
+  const answered = await withBus(sessionBus, async (invoke) => {
+    await invoke(OSD.destination, OSD.path, OSD.iface, 'showText', 'ss', [icon, text])
+    return true
+  })
+
+  if (osd === null) {
+    osd = answered === true
+    console.info(
+      osd
+        ? 'Notices over other windows go to the shell OSD, which does not take the focus.'
+        : 'No shell OSD answered; notices over other windows use the overlay window, which ' +
+            'may take the focus on Wayland.'
+    )
+    if (!osd) paint()
+  } else if (answered !== true) {
+    // Answered once and not now — plasmashell restarting, most likely. This
+    // notice is lost rather than drawn by a window that steals the focus; the
+    // next one asks again.
+    console.warn('The shell OSD did not take a notice; it was not shown.')
+  }
 }
 
 export function disarmNotices(): void {
@@ -207,11 +315,13 @@ function paint(): void {
   // because it could not draw a card about a headset — the wrong way round, so
   // this is loud in the log and silent everywhere else.
   try {
-    const { minimised, handedOff } = screenOwnership()
-    const overlaid = minimised || handedOff
+    const elsewhere = overlaid()
 
-    send(getMainWindow(), overlaid ? [] : live)
-    paintOverlay(overlaid ? live : [])
+    send(getMainWindow(), elsewhere ? [] : live)
+    // On Wayland the overlay is only the fallback for a session with no shell
+    // OSD, and is held back while that is still being asked rather than shown
+    // "just in case" — showing it is the focus theft the OSD exists to avoid.
+    paintOverlay(elsewhere && (placeable() || osd === false) ? live : [])
   } catch (error) {
     console.error('A notice could not be drawn:', error)
   }
@@ -255,8 +365,8 @@ function reveal(window: BrowserWindow): void {
   // made here: draw over what is in front without becoming what is in front.
   // On X11 the window type already guarantees it. On Wayland it is a request
   // the compositor may decline in either direction — KWin takes the focus
-  // anyway, which for a card that lives three and a half seconds is a blip
-  // rather than the fault it would be for a keyboard.
+  // anyway, which is why on Wayland this window is only the fallback for a
+  // session with no shell OSD. See the header.
   if (!window.isVisible()) window.showInactive()
 
   if (overlayShown) return

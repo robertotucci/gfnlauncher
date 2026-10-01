@@ -145,6 +145,20 @@ finish-args:
   # `--filesystem=` is needed for that and none should be added.
   - --talk-name=org.kde.KWin
 
+  # ── Saying something over a game ────────────────────────────────────────────
+  # Plasma's on-screen display (`org.kde.osdService.showText`), for the notices
+  # the launcher raises while a game is streaming — pointer mode switched on or
+  # off, a controller or a headset arriving (src/main/notify.ts). On Wayland
+  # the launcher's own overlay window is activated by KWin on every reveal, so
+  # the game under it lost its keyboard for the life of every card. The shell's
+  # OSD is the surface the volume popup uses: above a fullscreen window by role,
+  # never focusable, and not a notification, so Do Not Disturb does not swallow
+  # it.
+  #
+  # Asked, not assumed: away from Plasma, or with this revoked, the call fails
+  # once and the launcher falls back to its own overlay with a log line.
+  - --talk-name=org.kde.plasmashell
+
   # ── Which keyboard the person actually has ──────────────────────────────────
   # systemd-localed's `X11Layout`, read-only, and it decides what that composed
   # keyboard *is* (src/main/pointer/systemKeyboard.ts, `readSystemLayout`).
