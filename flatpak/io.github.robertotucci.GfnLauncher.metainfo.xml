@@ -115,6 +115,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.6" date="2026-10-01">
+      <description>
+        <p>Text typed into a game arrives in the order you wrote it, notices stop taking the keyboard from the game on KDE, and Bluetooth comes back on by itself.</p>
+        <ul>
+          <li>Fixed: a line composed on the on-screen keyboard and sent into a streamed game arrived scrambled, with letters out of order, double letters reduced to one and capitals in the wrong place</li>
+          <li>Fixed: on KDE Wayland a notice shown over a running game took the keyboard away from it; it now goes to Plasma's own on-screen display, which never takes the focus</li>
+          <li>A Bluetooth radio left off at login, at boot or after a suspend is switched back on for a short while afterwards, so a Bluetooth controller works without reaching for the desktop; a hardware switch is never touched</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.6</url>
+    </release>
     <release version="0.1.5" date="2026-08-22">
       <description>
         <p>Games open straight into the stream: the GeForce NOW window is fullscreen and frameless from the moment it appears, and titles sold on more than one store no longer stop to ask which one you bought them from.</p>

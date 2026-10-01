@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [0.1.6] - 2026-10-01
+
+### Added
+
+- **Bluetooth comes back on by itself.** If your controller is a Bluetooth one, a radio that was off when the launcher started meant a launcher you could not drive at all, with the switch to fix it on a screen you could not reach. Three ordinary things left it off: Plasma restoring the switch the way it was at logout, the system restoring a "soft" block at boot, and the adapter coming back from suspend powered down. For a short while after startup, after waking from suspend and when an adapter appears, the launcher now switches the radio back on, lifting that soft block first if it has to. It never touches a hardware switch, and if you turn Bluetooth off from the launcher's own Devices screen it stays off for the rest of the session. If the Bluetooth service restarts, the Devices screen now empties and fills up again instead of going on listing devices that are gone.
+
+### Fixed
+
+- **Text typed into a game now arrives in the order you wrote it.** Composing a line with the on-screen keyboard and sending it into a streamed game — a login box, a chat field, a name — delivered it scrambled: letters out of order, double letters reduced to one, capitals in the wrong place. Every key of the line was being pressed at once and released afterwards, so the game saw the whole word held down together. Keys now go one at a time, each pressed and released before the next.
+- **Notices no longer take the keyboard away from the game on KDE Wayland.** A card shown over a running game, like "pointer on" or a controller connecting, took the keyboard away from the game for the few seconds it was on screen, which is exactly when you were about to type into it. On KDE Wayland the notice now goes to Plasma's own on-screen display, the one the volume popup uses: it shows over a fullscreen game and never takes the focus. Other desktops show the card as before.
+
 ## [0.1.5] - 2026-08-22
 
 ### Added
