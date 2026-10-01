@@ -333,7 +333,8 @@ export async function openRemotePointer(
 
 // ── Sending input ───────────────────────────────────────────────────────────
 
-function buildPointer(
+/** Exported for the tests, which hand it a fake `invoke` and no real bus. */
+export function buildPointer(
   bus: MessageBus,
   session: string,
   invoke: (
@@ -371,52 +372,96 @@ function buildPointer(
     })
   }
 
+  /**
+   * Every keystroke, one at a time, in the order it was asked for.
+   *
+   * A keystroke is a press and a release, and the release can only go once the
+   * press has been answered — so starting each one the moment it is asked for,
+   * which is what this did, put every press of a composed word on the bus
+   * before the first release. The compositor then saw a run of keys held down
+   * together, and what reached the focused window was out of order, doubled
+   * letters collapsed into one, and shift landing on the wrong character. The
+   * keycode fallback made it worse by being a second stream racing the first.
+   * Chaining each stroke behind the last one is the whole fix; the cost is a
+   * round trip per key, which nobody typing with a pad will ever notice.
+   */
+  let keyboard: Promise<void> = Promise.resolve()
+
+  const enqueue = (stroke: () => Promise<void>): void => {
+    keyboard = keyboard
+      .then(() => (closed ? undefined : stroke()))
+      .catch((error: unknown) => {
+        if (complained) return
+        complained = true
+        console.error('The desktop portal rejected a keystroke; pointer mode may be dead:', error)
+      })
+  }
+
   const notifyKeysym = async (keysym: number, state: number): Promise<void> => {
     await invoke('NotifyKeyboardKeysym', 'oa{sv}iu', [session, [], keysym, state])
   }
 
-  const notifyKeycode = (keycode: number, state: number): void => {
-    fire('NotifyKeyboardKeycode', 'oa{sv}iu', [session, [], keycode, state])
+  const notifyKeycode = async (keycode: number, state: number): Promise<void> => {
+    await invoke('NotifyKeyboardKeycode', 'oa{sv}iu', [session, [], keycode, state])
+  }
+
+  const strokeKeycode = async (keycode: number, shift: boolean): Promise<void> => {
+    // A keycode carries no case, so shift has to be held around it by hand —
+    // and let go however the key itself went, or every key after it is capital.
+    if (shift) await notifyKeycode(KEY_LEFTSHIFT, PRESSED)
+    try {
+      await notifyKeycode(keycode, PRESSED)
+      await notifyKeycode(keycode, RELEASED)
+    } finally {
+      if (shift) await notifyKeycode(KEY_LEFTSHIFT, RELEASED)
+    }
+  }
+
+  /**
+   * One stroke by keysym where this session takes them, else by keycode.
+   *
+   * Because strokes are queued, the first one settles `keysymWorks` before the
+   * second is tried, so a portal without keysyms costs one failed call rather
+   * than one per character of whatever was typed first.
+   */
+  const stroke = async (
+    keysym: number | null,
+    fallback: (() => Promise<void>) | null
+  ): Promise<void> => {
+    if (keysym !== null && keysymWorks !== false) {
+      try {
+        await notifyKeysym(keysym, PRESSED)
+        await notifyKeysym(keysym, RELEASED)
+        keysymWorks = true
+        return
+      } catch (error) {
+        // Keysyms worked before, so this is the session failing, not a missing
+        // feature — a keycode would not get through either.
+        if (keysymWorks === true) throw error
+        // First failure: this portal has no keysym support. Say so once — the
+        // consequence is real and the user should know why an accented
+        // password suddenly types the wrong character.
+        keysymWorks = false
+        console.warn(
+          'This desktop portal does not accept keysyms, so the on-screen ' +
+            'keyboard falls back to US-layout keycodes. Symbols may differ ' +
+            'from the labels on a non-US keyboard layout.'
+        )
+      }
+    }
+    if (fallback) await fallback()
   }
 
   /** One character, by whichever route this session supports. */
   const sendChar = (char: string): void => {
     if (closed) return
-
-    const keysym = keysymForChar(char)
-    if (keysym !== null && keysymWorks !== false) {
-      notifyKeysym(keysym, PRESSED)
-        .then(() => notifyKeysym(keysym, RELEASED))
-        .then(() => {
-          keysymWorks = true
-        })
-        .catch(() => {
-          if (keysymWorks === true) return
-          // First failure: this portal has no keysym support. Say so once —
-          // the consequence is real and the user should know why an accented
-          // password suddenly types the wrong character.
-          keysymWorks = false
-          console.warn(
-            'This desktop portal does not accept keysyms, so the on-screen ' +
-              'keyboard falls back to US-layout keycodes. Symbols may differ ' +
-              'from the labels on a non-US keyboard layout.'
-          )
-          sendKeycodeChar(char)
-        })
-      return
-    }
-
-    sendKeycodeChar(char)
-  }
-
-  const sendKeycodeChar = (char: string): void => {
-    const stroke = keycodeForChar(char)
-    if (!stroke) return
-    // A keycode carries no case, so shift has to be held around it by hand.
-    if (stroke.shift) notifyKeycode(KEY_LEFTSHIFT, PRESSED)
-    notifyKeycode(stroke.keycode, PRESSED)
-    notifyKeycode(stroke.keycode, RELEASED)
-    if (stroke.shift) notifyKeycode(KEY_LEFTSHIFT, RELEASED)
+    const keycode = keycodeForChar(char)
+    enqueue(() =>
+      stroke(
+        keysymForChar(char),
+        keycode ? () => strokeKeycode(keycode.keycode, keycode.shift) : null
+      )
+    )
   }
 
   return {
@@ -443,24 +488,8 @@ function buildPointer(
 
     pressKey(key) {
       if (closed) return
-      const keysym = keysymForKey(key)
-      if (keysymWorks !== false) {
-        notifyKeysym(keysym, PRESSED)
-          .then(() => notifyKeysym(keysym, RELEASED))
-          .then(() => {
-            keysymWorks = true
-          })
-          .catch(() => {
-            keysymWorks = false
-            const stroke = keycodeForKey(key)
-            notifyKeycode(stroke.keycode, PRESSED)
-            notifyKeycode(stroke.keycode, RELEASED)
-          })
-        return
-      }
-      const stroke = keycodeForKey(key)
-      notifyKeycode(stroke.keycode, PRESSED)
-      notifyKeycode(stroke.keycode, RELEASED)
+      const keycode = keycodeForKey(key)
+      enqueue(() => stroke(keysymForKey(key), () => strokeKeycode(keycode.keycode, false)))
     },
 
     close() {
