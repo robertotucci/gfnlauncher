@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 Release notes on GitHub and the AppStream `<releases>` block are both generated from this file.
 
+## [0.1.8] - 2026-10-10
+
+### Added
+
+- **GeForce NOW's streaming settings, from the controller.** Settings → Streaming quality is the GeForce NOW app's own settings page, reachable without a mouse: the mode (Balanced, Data Saver, Competitive, Cinematic, Custom), resolution, frame rate, maximum bit rate in Mbps, codec, colour quality, HDR, VSync, Reflex, VRR, L4S, the AI video filter, the HUD sharpness filter, resolution upscaling and detail enhancement, DLSS overrides, the game language, in-game graphics settings, the clipboard and network warnings. They are not a copy: a change is saved straight into the GeForce NOW app, which shows it at once even if it is open, and a change made in the app shows up here within a couple of seconds. The page opens with what your next game will stream at, and each setting opens a list of its values — each bit rate with the data it uses in an hour. Only what your membership allows can be chosen — the launcher asks NVIDIA, the way the app does — because GeForce NOW quietly throws away a custom setup that asks for more. Anything that cannot be chosen is still listed and says why. If GeForce NOW resets your custom settings anyway, a card says so when you are back in the launcher.
+
 ## [0.1.7] - 2026-10-01
 
 ### Added

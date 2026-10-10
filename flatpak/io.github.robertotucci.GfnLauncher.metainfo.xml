@@ -115,6 +115,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.1.8" date="2026-10-10">
+      <description>
+        <p>GeForce NOW's streaming settings can be changed from the controller.</p>
+        <ul>
+          <li>Settings → Streaming quality is the GeForce NOW app's own settings page — mode, resolution, frame rate, bit rate, codec, colour, HDR, VSync, Reflex, VRR, upscaling, DLSS overrides, game language and more — saved straight into the app, so the two always agree</li>
+          <li>Only what your membership allows can be chosen, and anything that cannot be says why</li>
+          <li>A card says so if GeForce NOW resets your custom settings</li>
+        </ul>
+      </description>
+      <url type="details">https://github.com/robertotucci/gfnlauncher/releases/tag/v0.1.8</url>
+    </release>
     <release version="0.1.7" date="2026-10-01">
       <description>
         <p>The volume of your headphones can be turned up and down from the controller while you play.</p>
