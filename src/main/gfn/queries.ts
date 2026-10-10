@@ -164,3 +164,15 @@ export const OWNED_FILTER = {
 } as const
 
 export const NO_FILTER = {} as const
+
+/**
+ * Every language GeForce NOW can ask a game to use — the "Game language"
+ * setting's list. The client's own document, from its LCARS query table, sent
+ * under the `requestType` it uses. Locale codes such as `it_IT`.
+ */
+export const GAME_LANGUAGES = `
+query GetOverallGfnSupportedLanguages{
+  overallGfnSupportedLanguages {
+    language
+  }
+}`

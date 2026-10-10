@@ -8,6 +8,7 @@ import {
   Mouse,
   MousePointer2,
   MousePointerBan,
+  SlidersHorizontal,
   Smartphone,
   Speaker,
   Usb,
@@ -61,7 +62,9 @@ const NOTICE_ICONS: Record<NoticeIcon, ComponentType<{ className?: string }>> = 
   // Like the pointer pair, the glyph is the state: the title already carries
   // the number, and muted versus audible is the part read at a glance.
   volume: Volume2,
-  'volume-off': VolumeX
+  'volume-off': VolumeX,
+  // The same glyph the Settings row that undoes it wears.
+  'stream-settings': SlidersHorizontal
 }
 
 /**

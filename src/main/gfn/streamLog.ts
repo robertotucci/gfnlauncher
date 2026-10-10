@@ -45,9 +45,9 @@
 
 import { watchFile, unwatchFile, type Stats } from 'node:fs'
 import { open } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
+import { clientStateDir } from './clientState'
 
 /**
  * The line that means the game is over and the client's UI is back on the mall,
@@ -128,25 +128,11 @@ export function readStreamPhase(phase: StreamPhase, chunk: string): StreamPhase 
 }
 
 /**
- * Where the client writes it.
- *
- * A function rather than a module constant for the same reason as
- * `status/zone.ts`'s `zoneStoragePath`: `homedir()` is cheap, and a constant
- * evaluated at import time is a constant no test can move.
+ * Where the client writes it: `logs/` in the state directory `clientState.ts`
+ * names, so this and the storage file cannot drift apart.
  */
 export function streamLogPath(): string {
-  return join(
-    homedir(),
-    '.var',
-    'app',
-    'com.nvidia.geforcenow',
-    '.local',
-    'state',
-    'NVIDIA',
-    'GeForceNOW',
-    'logs',
-    'gameStreamClientAgent.log'
-  )
+  return join(clientStateDir(), 'logs', 'gameStreamClientAgent.log')
 }
 
 /** How often the path is stat'd while a session is live. */

@@ -41,7 +41,7 @@ export interface AlsConfig {
    * the GraphQL credential.
    *
    * `webAuth.ts` reads it out of the hosted web client's own Starfleet session;
-   * `session.getAlsToken()` withholds it once expired. Null when it could not
+   * `session.getIdToken()` withholds it once expired. Null when it could not
    * be read, and then the request goes out unauthenticated and is refused,
    * which is a truthful outcome rather than a silent one.
    */

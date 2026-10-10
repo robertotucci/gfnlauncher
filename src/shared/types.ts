@@ -5,6 +5,11 @@
  * that all three bundles can consume it.
  */
 
+import type {
+  ClientSettingChange,
+  ClientSettingResult,
+  ClientSettingsSnapshot
+} from './clientSettings'
 import type { BluetoothAction } from './bluetooth'
 import type { ScreenOwnership } from './input'
 import type { DeviceKind, Notice } from './notify'
@@ -872,6 +877,22 @@ export interface LauncherApi {
     /** Opens NVIDIA's sign-in page in a window the launcher owns. */
     signIn(): Promise<AuthResult>
     signOut(): Promise<void>
+  }
+  /**
+   * GeForce NOW's own settings — the official app's Settings page — read from
+   * and written into the client's storage. See `@shared/clientSettings`.
+   */
+  clientSettings: {
+    /** The page from the file and the cached membership. No network. Polled while open. */
+    get(): Promise<ClientSettingsSnapshot>
+    /**
+     * Asks NVIDIA for the membership and the game languages, then answers with
+     * the page. Memoised for minutes unless `force`, which the refresh control
+     * passes.
+     */
+    refresh(force?: boolean): Promise<ClientSettingsSnapshot>
+    /** One change. Never throws: a refusal comes back with its reason. */
+    update(change: ClientSettingChange): Promise<ClientSettingResult>
   }
   status: {
     /**

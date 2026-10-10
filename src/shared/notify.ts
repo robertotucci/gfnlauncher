@@ -68,6 +68,13 @@ export type Announcement =
       readonly output: string
     }
   | { readonly kind: 'volume-unavailable'; readonly reason: string }
+  /**
+   * GeForce NOW deleted the custom stream profile — at launch, because it asked
+   * for something the membership or this computer does not allow, or because
+   * somebody pressed RESET in the official app. From the sofa the two look the
+   * same: the game streams in Balanced while the mode still reads Custom.
+   */
+  | { readonly kind: 'stream-profile-reset' }
 
 /**
  * Which icon to draw, as an id rather than a component.
@@ -89,6 +96,7 @@ export type NoticeIcon =
   | 'device'
   | 'volume'
   | 'volume-off'
+  | 'stream-settings'
 
 export interface Notice {
   /** Monotonic within a run. The React key, and how main finds one again. */
@@ -203,6 +211,16 @@ export function noticeContent(what: Announcement): NoticeContent {
         title: 'Volume unavailable',
         hint: what.reason,
         icon: 'volume-off'
+      }
+    case 'stream-profile-reset':
+      return {
+        group: 'stream-settings',
+        title: 'Custom stream settings were reset',
+        // The way back, and the likely cause, in one line: the reset happens
+        // at launch, and the usual reason is a value the account or this
+        // computer cannot do.
+        hint: 'GeForce NOW streams in Balanced until you set them again in Settings → Streaming quality',
+        icon: 'stream-settings'
       }
     case 'device-connected':
     case 'device-disconnected': {

@@ -276,3 +276,18 @@ describe('noticeContent — devices', () => {
     )
   })
 })
+
+describe('noticeContent — stream settings', () => {
+  it('says what happened and where to undo it', () => {
+    const content = noticeContent({ kind: 'stream-profile-reset' })
+    expect(content.title).toBe('Custom stream settings were reset')
+    expect(content.hint).toMatch(/Balanced/)
+    expect(content.hint).toMatch(/Streaming quality/)
+  })
+
+  it('is its own group, so a second reset replaces the first card', () => {
+    expect(noticeContent({ kind: 'stream-profile-reset' }).group).not.toBe(
+      noticeContent({ kind: 'pointer-on' }).group
+    )
+  })
+})

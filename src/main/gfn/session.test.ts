@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CapturedSession } from './webAuth'
-import { getAlsToken, getSession, invalidateSession, readExpiry, signIn } from './session'
+import { getIdToken, getSession, invalidateSession, readExpiry, signIn } from './session'
 
 // The real one hosts a BrowserWindow. Everything under test here is what the
 // session module does with what comes back from it.
@@ -61,43 +61,43 @@ describe('readExpiry', () => {
   })
 })
 
-describe('getAlsToken', () => {
+describe('getIdToken', () => {
   beforeEach(() => {
     invalidateSession()
   })
 
   it('returns nothing when there is no session at all', () => {
-    expect(getAlsToken()).toBeNull()
+    expect(getIdToken()).toBeNull()
   })
 
   it('hands back a live id token', async () => {
     const token = jwt({ exp: 2_000_000_000 })
     await signInWith(token)
-    expect(getAlsToken(1_900_000_000_000)).toBe(token)
+    expect(getIdToken(1_900_000_000_000)).toBe(token)
   })
 
   it('withholds an expired one rather than letting ALS answer 401', async () => {
     const token = jwt({ exp: 1_700_000_000 })
     await signInWith(token)
-    expect(getAlsToken(1_800_000_000_000)).toBeNull()
+    expect(getIdToken(1_800_000_000_000)).toBeNull()
   })
 
   it('withholds one inside the skew, before it is strictly spent', async () => {
     const token = jwt({ exp: 1_700_000_000 })
     await signInWith(token)
-    expect(getAlsToken(1_700_000_000_000 - 30_000)).toBeNull()
+    expect(getIdToken(1_700_000_000_000 - 30_000)).toBeNull()
   })
 
   it('keeps a token whose lifetime cannot be read', async () => {
     // Unknown is not the same as expired; let the server be the judge.
     const token = jwt({ sub: 'user' })
     await signInWith(token)
-    expect(getAlsToken()).toBe(token)
+    expect(getIdToken()).toBe(token)
   })
 
   it('returns nothing when the capture could not read one', async () => {
     await signInWith(null)
-    expect(getAlsToken()).toBeNull()
+    expect(getIdToken()).toBeNull()
   })
 })
 
@@ -109,6 +109,6 @@ describe('invalidateSession', () => {
     invalidateSession()
 
     expect(getSession()).toBeNull()
-    expect(getAlsToken()).toBeNull()
+    expect(getIdToken()).toBeNull()
   })
 })

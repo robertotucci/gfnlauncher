@@ -164,7 +164,8 @@ const OSD_ICONS: Record<NoticeIcon, string> = {
   phone: 'phone',
   device: 'preferences-desktop-peripherals',
   volume: 'audio-volume-high',
-  'volume-off': 'audio-volume-muted'
+  'volume-off': 'audio-volume-muted',
+  'stream-settings': 'preferences-system'
 }
 
 /**

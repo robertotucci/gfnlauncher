@@ -1,5 +1,13 @@
-import { type ComponentType, type ReactNode } from 'react'
-import { ArrowUpCircle, Bluetooth, ExternalLink, LogIn, LogOut, RefreshCw } from 'lucide-react'
+import { type ReactNode } from 'react'
+import {
+  ArrowUpCircle,
+  Bluetooth,
+  ExternalLink,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  SlidersHorizontal
+} from 'lucide-react'
 import type { LaunchMode, LinkedProvider, Settings, UpdateStatus } from '@shared/types'
 import {
   ACCENT_PRESETS,
@@ -11,141 +19,11 @@ import {
   UI_SCALE_PRESETS
 } from '@shared/theme'
 import { useFocusable } from '@/focus/SpatialFocus'
+import { ActionRow, ChoiceChip, Section, ToggleRow } from '@/components/SettingsRows'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-
-/**
- * The shared shell for a settings row.
- *
- * Every row is a single focusable, and the whole row is the control. Nesting a
- * second interactive element inside would give the row two competing focus
- * models — which is why the Switch below is rendered inert.
- *
- * A `disabled` row stays registered and stays reachable. Dropping it would make
- * the geometry of the screen depend on state — the cursor would jump somewhere
- * different depending on whether the user happens to be signed in — and that is
- * worse than an inert row. What makes it diagnosable is the description, which
- * must say *why* it is off: on a screen with no keyboard, a control that
- * silently does nothing is the one failure nobody can explain.
- */
-function Row({
-  id,
-  scope,
-  label,
-  description,
-  onConfirm,
-  disabled,
-  role,
-  checked,
-  children
-}: {
-  id: string
-  scope: string
-  label: string
-  description: string
-  onConfirm: () => void
-  disabled?: boolean
-  role?: 'switch' | 'button'
-  checked?: boolean
-  children: ReactNode
-}): ReactNode {
-  const confirm = (): void => {
-    if (!disabled) onConfirm()
-  }
-  const { ref, focused } = useFocusable<HTMLButtonElement>(id, { scope, onConfirm: confirm })
-
-  return (
-    <button
-      ref={ref}
-      type="button"
-      role={role}
-      aria-checked={role === 'switch' ? checked : undefined}
-      aria-disabled={disabled || undefined}
-      onClick={confirm}
-      className={cn(
-        'flex w-full items-center justify-between gap-8 rounded-md px-4 py-3.5 text-left transition-colors duration-150',
-        focused ? 'focus-ring bg-accent' : 'bg-transparent',
-        disabled && 'opacity-50'
-      )}
-    >
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">{label}</span>
-        <span className="text-muted-foreground mt-1 block text-xs">{description}</span>
-      </span>
-      <span className="flex shrink-0 items-center">{children}</span>
-    </button>
-  )
-}
-
-/** A settings row minus the parts each kind of row fills in for itself. */
-type RowShell = Omit<Parameters<typeof Row>[0], 'children' | 'role' | 'checked'>
-
-function ActionRow({
-  icon: Icon,
-  busy,
-  ...row
-}: RowShell & {
-  icon: ComponentType<{ className?: string }>
-  busy?: boolean
-}): ReactNode {
-  return (
-    <Row {...row} role="button">
-      <Icon className={cn('text-muted-foreground size-4', busy && 'animate-spin')} />
-    </Row>
-  )
-}
-
-/**
- * The switch, drawn rather than instantiated.
- *
- * It used to be the real shadcn `Switch`, rendered inert — which reads well
- * until you notice what it is: Radix's `Switch` is a `<button>`, and `Row` is a
- * `<button>`. Interactive content nested inside a button is invalid HTML, and
- * React says so out loud: two `console.error`s and a twenty-line component
- * stack, on every visit to this screen. Since `log.ts` tees the renderer's
- * console into the file the README asks people to attach to a bug report, the
- * cost was not a warning nobody sees — it was the launcher filling its own
- * one-megabyte log with a complaint about itself.
- *
- * So the indicator is spans, with the same geometry, the same tokens and the
- * same 150 ms transition as the component it replaces. Nothing is lost: the row
- * already carries `role="switch"` and `aria-checked`, the confirm is the row's,
- * and nothing in this interface ever takes real DOM focus.
- */
-function SwitchIndicator({ checked }: { checked: boolean }): ReactNode {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-colors duration-150',
-        checked ? 'bg-primary' : 'bg-input/80'
-      )}
-    >
-      <span
-        className={cn(
-          'block size-4 rounded-full transition-transform duration-150',
-          checked ? 'bg-primary-foreground translate-x-[calc(100%-2px)]' : 'bg-foreground translate-x-0'
-        )}
-      />
-    </span>
-  )
-}
-
-function ToggleRow({
-  value,
-  ...row
-}: RowShell & {
-  value: boolean
-}): ReactNode {
-  return (
-    <Row {...row} role="switch" checked={value}>
-      <SwitchIndicator checked={value} />
-    </Row>
-  )
-}
 
 /**
  * The accent swatches.
@@ -300,52 +178,6 @@ function KeyboardScaleRow({ scope, value, onSelect }: {
   )
 }
 
-/**
- * One option in a row of mutually exclusive ones.
- *
- * Takes a whole focus id rather than building one from a prefix: ids are global
- * across scopes, so every row that uses this has to namespace its own.
- */
-function ChoiceChip({
-  scope,
-  focusId,
-  label,
-  selected,
-  onSelect
-}: {
-  scope: string
-  focusId: string
-  label: string
-  selected: boolean
-  onSelect: () => void
-}): ReactNode {
-  const { ref, focused } = useFocusable<HTMLButtonElement>(focusId, {
-    scope,
-    onConfirm: onSelect
-  })
-
-  return (
-    <button
-      ref={ref}
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={cn(
-        'shrink-0 rounded-md border px-3 py-1.5 font-mono text-xs tabular-nums transition-all duration-150',
-        // Same three states as the genre chips: the cursor outranks a step that
-        // merely happens to be the current one.
-        focused
-          ? 'focus-ring border-primary bg-primary text-primary-foreground scale-[1.04]'
-          : selected
-            ? 'border-foreground/25 bg-accent text-foreground'
-            : 'border-border bg-card text-muted-foreground'
-      )}
-    >
-      {label}
-    </button>
-  )
-}
-
 /** Labels and the one-line case for each launch mode. */
 /**
  * Ordered with the default first and `auto` last: the two explicit modes always
@@ -413,19 +245,6 @@ function LaunchModeRow({
   )
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }): ReactNode {
-  return (
-    <Card className="gap-3 py-4">
-      <CardHeader className="px-4">
-        <CardTitle className="text-muted-foreground text-xs font-medium tracking-widest uppercase">
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-1.5">{children}</CardContent>
-    </Card>
-  )
-}
-
 export function SettingsScreen({
   settings,
   providers,
@@ -447,6 +266,7 @@ export function SettingsScreen({
   logPath,
   onUpdate,
   onOpenDevices,
+  onOpenStream,
   onRefreshCatalog,
   onSyncAll,
   onOpenGfn,
@@ -493,6 +313,8 @@ export function SettingsScreen({
   onUpdate: (patch: Partial<Settings>) => void
   /** Opens the Devices screen, which is a page of this one rather than a view. */
   onOpenDevices: () => void
+  /** Opens GeForce NOW's own settings, another page of this one. */
+  onOpenStream: () => void
   onRefreshCatalog: () => void
   onSyncAll: () => void
   onOpenGfn: () => void
@@ -702,6 +524,27 @@ export function SettingsScreen({
         </Section>
 
         <Section title="GeForce NOW client">
+          <ActionRow
+            id="setting:stream"
+            scope={scope}
+            label="Streaming quality"
+            // What it is for before what it is, like the Devices row: the
+            // values are the official app's own, so a change here is a change
+            // there — not a second set the launcher keeps.
+            description={
+              gfnInstalled
+                ? 'Resolution, frame rate, bit rate, codec, HDR, DLSS and the rest of the GeForce NOW app’s own settings. Changed here, saved into the app.'
+                : gfnProbeError
+                  ? 'The client could not be reached from inside the Flatpak sandbox, so its settings cannot be read from here.'
+                  : 'The com.nvidia.geforcenow Flatpak is not installed, so there are no settings to change.'
+            }
+            icon={SlidersHorizontal}
+            disabled={!gfnInstalled}
+            onConfirm={onOpenStream}
+          />
+
+          <Separator className="my-1" />
+
           <ToggleRow
             id="setting:clientFullscreen"
             scope={scope}
@@ -717,7 +560,7 @@ export function SettingsScreen({
             label="Open the GeForce NOW app"
             description={
               gfnInstalled
-                ? 'For the settings this launcher does not mirror — stream quality, connected accounts, controller mapping. They apply to the sessions started from here. The launcher steps aside, and coming back needs a mouse or keyboard.'
+                ? 'For what the launcher does not mirror — connected accounts, the server location, controller mapping. They apply to the sessions started from here. The launcher steps aside, and coming back needs a mouse or keyboard.'
                 : gfnProbeError
                   ? // Not "it is not installed": we never got to look. Saying the
                     // former would send the user to reinstall a client that is

@@ -27,6 +27,12 @@ import {
 import type { Notice } from '@shared/notify'
 import { accentValue, DEFAULT_ACCENT } from '@shared/theme'
 import type { BluetoothAction } from '@shared/bluetooth'
+import type {
+  ChoiceRow,
+  ClientSettingChange,
+  ClientSettingsSnapshot,
+  FieldId
+} from '@shared/clientSettings'
 import { useGamepad, useIntent } from '@/gamepad/GamepadProvider'
 import { usePadWakeLock } from '@/gamepad/wakeLock'
 import { useSpatialFocus } from '@/focus/SpatialFocus'
@@ -46,6 +52,12 @@ import {
   primaryAction
 } from '@/components/DevicesScreen'
 import { DonateScreen, DONATE_FOCUS_ID } from '@/components/DonateScreen'
+import {
+  StreamSettingsScreen,
+  STREAM_LANDING_ID,
+  streamFocusId
+} from '@/components/StreamSettingsScreen'
+import { pickerLanding, SettingPicker, STREAM_PICKER_SCOPE } from '@/components/SettingPicker'
 import { SearchOverlay, SEARCH_SCOPE } from '@/components/SearchOverlay'
 import { GameDetailsModal, DETAILS_SCOPE } from '@/components/GameDetailsModal'
 import { ScreenshotViewer, SHOTS_SCOPE } from '@/components/ScreenshotViewer'
@@ -108,6 +120,16 @@ const RESTART_COUNTDOWN_S = 10
  * is open.
  */
 const BLUETOOTH_POLL_MS = 1_000
+
+/**
+ * How often the streaming page re-reads the client's settings while it is open.
+ *
+ * The Devices argument again: the page plainly knows it is watching a value
+ * another application can change, so it asks, rather than the bridge growing a
+ * seventh push. Main answers an unchanged file from the last snapshot without
+ * reading it, and the two seconds match the client watch's own stat interval.
+ */
+const STREAM_POLL_MS = 2_000
 
 /** "1 store" / "3 stores", so the notice line reads like a sentence. */
 function storeCount(count: number): string {
@@ -233,6 +255,14 @@ export function App(): ReactNode {
   const [bluetoothLoading, setBluetoothLoading] = useState(false)
   /** What the last Bluetooth action had to say. Cleared by the next one. */
   const [bluetoothNotice, setBluetoothNotice] = useState<string | null>(null)
+  /** GeForce NOW's own settings. Null until the streaming page is first opened. */
+  const [stream, setStream] = useState<ClientSettingsSnapshot | null>(null)
+  const [streamRefreshing, setStreamRefreshing] = useState(false)
+  const [streamBusy, setStreamBusy] = useState<FieldId | null>(null)
+  const [streamError, setStreamError] = useState<{ field: FieldId; message: string } | null>(null)
+  /** The setting whose list is open over the streaming page, if any. */
+  const [pickerField, setPickerField] = useState<FieldId | null>(null)
+  const [pickerClosing, setPickerClosing] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [signingIn, setSigningIn] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -407,8 +437,9 @@ export function App(): ReactNode {
     return games.filter((game) => normalise(game.title).includes(needle))
   }, [games, query])
 
+  const pickerOpen = pickerField !== null
   const overlayOpen =
-    detailsGame !== null || searchOpen || shots !== null || powerOpen || updateOpen
+    detailsGame !== null || searchOpen || shots !== null || powerOpen || updateOpen || pickerOpen
 
   const focusedGame = useMemo(() => {
     const cmsId = focusedId?.replace(/^(tile|result):/, '')
@@ -451,11 +482,23 @@ export function App(): ReactNode {
 
     const landing = `${view}/${genre}`
     if (lastLanding.current === landing) return
+    /** The view this landing is leaving, for the way back from a page. */
+    const from = lastLanding.current?.split('/')[0]
 
     const target =
       view === 'settings'
-        ? 'setting:auth'
-        : // Refresh is the only focusable above the fold, and re-checking is the
+        ? // Back from one of its pages, the cursor goes to the row that opened
+          // it — the top of the screen is where nobody was.
+          from === 'stream'
+          ? 'setting:stream'
+          : from === 'devices'
+            ? 'setting:devices'
+            : 'setting:auth'
+        : // The membership row: always mounted, even before the first answer,
+          // and asking NVIDIA again is the one action that is always there.
+          view === 'stream'
+          ? STREAM_LANDING_ID
+          : // Refresh is the only focusable above the fold, and re-checking is the
           // most useful thing the cursor's first resting place could do here.
           view === 'status'
           ? 'status:refresh'
@@ -695,6 +738,68 @@ export function App(): ReactNode {
       window.setTimeout(() => focus('nav:power'), 0)
     }, EXIT_MS)
   }, [setActiveScope, focus])
+
+  /**
+   * The row whose list is open, read off the live snapshot, so a change the
+   * official app makes while the list is up shows in the list too.
+   */
+  const pickerRow = useMemo((): ChoiceRow | null => {
+    if (!pickerField || !stream?.sections) return null
+    for (const section of stream.sections) {
+      for (const row of section.rows) {
+        if (row.field === pickerField && row.kind === 'choice') return row
+      }
+    }
+    return null
+  }, [pickerField, stream])
+
+  /** Focus ids of the switches on the streaming page, for the legend's verb. */
+  const streamToggleIds = useMemo(
+    () =>
+      new Set(
+        (stream?.sections ?? [])
+          .flatMap((section) => section.rows)
+          .filter((row) => row.kind === 'toggle')
+          .map((row) => streamFocusId(row.field))
+      ),
+    [stream]
+  )
+
+  const openPicker = useCallback(
+    (field: FieldId) => {
+      const row = stream?.sections
+        ?.flatMap((section) => section.rows)
+        .find((candidate) => candidate.field === field && candidate.kind === 'choice')
+      if (!row || row.kind !== 'choice') return
+      setPickerField(field)
+      setActiveScope(STREAM_PICKER_SCOPE)
+      // On the value in effect: the list is for changing it, and the cursor
+      // starting on it is what says which one that is.
+      const landing = pickerLanding(row)
+      if (landing) window.setTimeout(() => focus(landing), 0)
+    },
+    [stream, setActiveScope, focus]
+  )
+
+  const closePicker = useCallback(() => {
+    const field = pickerField
+    setPickerClosing(true)
+    window.setTimeout(() => {
+      setPickerField(null)
+      setPickerClosing(false)
+      setActiveScope(ROOT_SCOPE)
+      // Back to the row that opened the list, not to the top of the page.
+      if (field) window.setTimeout(() => focus(streamFocusId(field)), 0)
+    }, EXIT_MS)
+  }, [pickerField, setActiveScope, focus])
+
+  /**
+   * A list whose row has gone — a refresh found DLSS no longer entitled, say —
+   * would leave the cursor in a scope with nothing in it. Close it instead.
+   */
+  useEffect(() => {
+    if (pickerField && !pickerClosing && stream && !pickerRow) closePicker()
+  }, [pickerField, pickerClosing, stream, pickerRow, closePicker])
 
   const openUpdate = useCallback(
     (status: UpdateStatus) => {
@@ -952,7 +1057,16 @@ export function App(): ReactNode {
     // cursor was free to walk out of a panel that was still on screen while
     // every button was correctly ignored, and there is no reason for the two to
     // disagree.
-    if (detailsClosing || searchClosing || shotsClosing || powerClosing || updateClosing) return
+    if (
+      detailsClosing ||
+      searchClosing ||
+      shotsClosing ||
+      powerClosing ||
+      updateClosing ||
+      pickerClosing
+    ) {
+      return
+    }
 
     // An update being installed is the one modal state the launcher does not
     // let you leave. Closing would not stop the download, and a dialog that
@@ -980,17 +1094,19 @@ export function App(): ReactNode {
         break
       case 'back':
         if (updateOpen) closeUpdate()
+        else if (pickerOpen) closePicker()
         else if (powerOpen) closePower()
         else if (shotsOpen) closeShots()
         else if (detailsOpen) closeDetails()
         else if (searchOpen) closeSearch()
-        // Devices is a page of Settings rather than a destination, so B goes
-        // back the way the user came in. Everywhere else B means "the library".
-        else if (view === 'devices') setView('settings')
+        // Devices and Streaming quality are pages of Settings rather than
+        // destinations, so B goes back the way the user came in. Everywhere
+        // else B means "the library".
+        else if (view === 'devices' || view === 'stream') setView('settings')
         else if (view !== 'library') setView('library')
         break
       case 'search':
-        if (shotsOpen || powerOpen || updateOpen) break
+        if (shotsOpen || powerOpen || updateOpen || pickerOpen) break
         // Inside the panel X is not "search" — there is nothing to search — so
         // it carries the one action the face buttons had no room for.
         if (detailsOpen) {
@@ -1008,7 +1124,7 @@ export function App(): ReactNode {
         else openSearch()
         break
       case 'menu':
-        if (!searchOpen && !detailsOpen && !shotsOpen && !powerOpen && !updateOpen) {
+        if (!searchOpen && !detailsOpen && !shotsOpen && !powerOpen && !updateOpen && !pickerOpen) {
           setView((current) => (current === 'settings' ? 'library' : 'settings'))
         }
         break
@@ -1016,7 +1132,7 @@ export function App(): ReactNode {
       // the user has left over. On the grid that is the one-press launch that A
       // used to be; in the details panel it is the way back out.
       case 'start':
-        if (shotsOpen || powerOpen || updateOpen) break
+        if (shotsOpen || powerOpen || updateOpen || pickerOpen) break
         if (detailsOpen) closeDetails()
         else launchFocused()
         break
@@ -1032,10 +1148,12 @@ export function App(): ReactNode {
           !searchOpen &&
           !powerOpen &&
           !updateOpen &&
+          !pickerOpen &&
           view !== 'settings' &&
           view !== 'status' &&
           view !== 'recent' &&
           view !== 'devices' &&
+          view !== 'stream' &&
           view !== 'support'
         ) {
           setGenre((current) => cycleGenre(genreFacets, current, step, rtxCount))
@@ -1174,6 +1292,122 @@ export function App(): ReactNode {
       if (last?.scanning) void window.launcher.bluetooth.scan(false)
     }
   }, [view])
+
+  /**
+   * The newest snapshot of the streaming page wins.
+   *
+   * The page polls while a change may be in flight, and a poll answered from
+   * before the write would otherwise land after the change's own answer and put
+   * the old value back on screen for two seconds.
+   */
+  const streamRevision = useRef(0)
+  const applyStream = useCallback((next: ClientSettingsSnapshot) => {
+    if (next.revision < streamRevision.current) return
+    streamRevision.current = next.revision
+    setStream(next)
+  }, [])
+
+  /**
+   * The streaming page: read on entry, asked of NVIDIA on entry, and polled
+   * while it is open.
+   *
+   * The poll is what keeps it a mirror — a change made in the official app,
+   * which is the one other place these values live, arrives within a couple of
+   * seconds. The entry refresh is memoised in main, so walking in and out of
+   * the page is navigation rather than a network round trip each time.
+   */
+  useEffect(() => {
+    if (view !== 'stream') return
+    // Guarded like the Devices effect, for the same reason.
+    if (!window.launcher) return
+
+    let live = true
+    const read = (): void => {
+      void window.launcher.clientSettings
+        .get()
+        .then((next) => {
+          if (live) applyStream(next)
+        })
+        .catch((error: unknown) => console.error('GeForce NOW settings could not be read:', error))
+    }
+
+    read()
+    setStreamRefreshing(true)
+    void window.launcher.clientSettings
+      .refresh(false)
+      .then((next) => {
+        if (live) applyStream(next)
+      })
+      .catch((error: unknown) => console.error('The membership could not be refreshed:', error))
+      .finally(() => setStreamRefreshing(false))
+    const timer = window.setInterval(read, STREAM_POLL_MS)
+
+    return () => {
+      live = false
+      window.clearInterval(timer)
+      // An error describes one press, not a standing state.
+      setStreamError(null)
+    }
+  }, [view, applyStream])
+
+  /**
+   * Coming back from the official app re-reads at once.
+   *
+   * "Open the GeForce NOW app" is one row away, and the obvious thing to do
+   * there is change a setting and come back; the poll would catch up within its
+   * interval, and this makes it immediate. `inputAccepted` turning true is the
+   * screen being ours again, however it got there.
+   */
+  const wasAccepting = useRef(inputAccepted)
+  useEffect(() => {
+    const returned = inputAccepted && !wasAccepting.current
+    wasAccepting.current = inputAccepted
+    if (!returned || view !== 'stream' || !window.launcher) return
+    void window.launcher.clientSettings
+      .get()
+      .then(applyStream)
+      .catch((error: unknown) => console.error('GeForce NOW settings could not be read:', error))
+  }, [inputAccepted, view, applyStream])
+
+  /** One change, folded back in; a refusal is a sentence under its row. */
+  const changeStreamSetting = useCallback(
+    async (change: ClientSettingChange) => {
+      setStreamBusy(change.field)
+      setStreamError(null)
+      try {
+        const result = await window.launcher.clientSettings.update(change)
+        applyStream(result.snapshot)
+        if (!result.ok) {
+          setStreamError({
+            field: result.field,
+            message: result.error ?? 'The change could not be made.'
+          })
+        }
+      } catch (error) {
+        // The channel answers with a result rather than throwing, so reaching
+        // here means the bridge did — the Bluetooth posture.
+        console.error('GeForce NOW setting could not be changed:', error)
+        setStreamError({
+          field: change.field,
+          message: 'The launcher could not reach its own main process.'
+        })
+      } finally {
+        setStreamBusy(null)
+      }
+    },
+    [applyStream]
+  )
+
+  const refreshStream = useCallback(async () => {
+    setStreamRefreshing(true)
+    try {
+      applyStream(await window.launcher.clientSettings.refresh(true))
+    } catch (error) {
+      console.error('The membership could not be refreshed:', error)
+    } finally {
+      setStreamRefreshing(false)
+    }
+  }, [applyStream])
 
   /**
    * Runs one Bluetooth action and folds the answer back in.
@@ -1523,6 +1757,11 @@ export function App(): ReactNode {
         { action: 'confirm', label: 'Select' },
         { action: 'back', label: 'Cancel' }
       ]
+    : pickerOpen
+    ? [
+        { action: 'confirm', label: 'Choose' },
+        { action: 'back', label: 'Cancel' }
+      ]
     : shots !== null
       ? [{ action: 'back', label: 'Close' }]
       : detailsGame
@@ -1583,6 +1822,24 @@ export function App(): ReactNode {
                   ...(focusedDevice?.paired
                     ? [{ action: 'search' as const, label: 'Forget' }]
                     : []),
+                  { action: 'back', label: 'Back' },
+                  { action: 'menu', label: 'Settings' }
+                ]
+            : view === 'stream'
+              ? [
+                  // The word A will do on what is under the cursor: a list
+                  // opens, a switch flips, a mode is chosen, NVIDIA is asked.
+                  {
+                    action: 'confirm',
+                    label:
+                      focusedId === STREAM_LANDING_ID
+                        ? 'Refresh'
+                        : focusedId?.startsWith('stream:mode:')
+                          ? 'Select'
+                          : streamToggleIds.has(focusedId ?? '')
+                            ? 'Toggle'
+                            : 'Change'
+                  },
                   { action: 'back', label: 'Back' },
                   { action: 'menu', label: 'Settings' }
                 ]
@@ -1675,6 +1932,7 @@ export function App(): ReactNode {
                 logPath={logPath}
                 onUpdate={updateSettings}
                 onOpenDevices={() => setView('devices')}
+                onOpenStream={() => setView('stream')}
                 onRefreshCatalog={refreshCatalog}
                 onSyncAll={() => void syncAllStores()}
                 onOpenGfn={() => void openGfnApp()}
@@ -1703,6 +1961,21 @@ export function App(): ReactNode {
               onRespond={(accept) =>
                 void runBluetooth(() => window.launcher.bluetooth.respond(accept))
               }
+            />
+          ) : view === 'stream' ? (
+            // Renders its own header for the reason Status does: the Refresh
+            // control belongs on the same row as the title.
+            <StreamSettingsScreen
+              snapshot={stream}
+              scope={ROOT_SCOPE}
+              locale={settings?.locale.replace('_', '-') ?? 'en-US'}
+              launchMode={settings?.launchMode ?? 'native'}
+              refreshing={streamRefreshing}
+              busyField={streamBusy}
+              fieldError={streamError}
+              onChange={(change) => void changeStreamSetting(change)}
+              onOpenPicker={openPicker}
+              onRefresh={() => void refreshStream()}
             />
           ) : view === 'support' ? (
             // Owns its header too, for a different reason than Status does: the
@@ -1823,6 +2096,20 @@ export function App(): ReactNode {
             onRun={(action) => void runPower(action)}
             onDesktop={returnToDesktop}
             onClose={closePower}
+          />
+        )}
+
+        {pickerRow && (
+          <SettingPicker
+            row={pickerRow}
+            closing={pickerClosing}
+            onPick={(value) => {
+              const field = pickerRow.field
+              const unchanged = value === pickerRow.selected
+              closePicker()
+              if (!unchanged) void changeStreamSetting({ field, value } as ClientSettingChange)
+            }}
+            onClose={closePicker}
           />
         )}
 

@@ -4,6 +4,7 @@ import { execute, type GfnGraphQLConfig } from './graphql'
 import {
   ADD_OWNED_VARIANT,
   APP_STORE_FEATURES,
+  GAME_LANGUAGES,
   REMOVE_OWNED_VARIANT,
   SELECT_OWNED_VARIANT,
   USER_ACCOUNT_LINKING
@@ -139,4 +140,31 @@ export async function selectVariant(
     cmsId: variantId,
     locale: config.locale
   })
+}
+
+/**
+ * The locale codes a game can be asked to use, as the "Game language" setting
+ * lists them.
+ *
+ * Pure half: `parseGameLanguages` keeps strings that look like a locale and
+ * nothing else, so a reshaped answer is an empty list rather than junk chips.
+ */
+export function parseGameLanguages(raw: unknown): string[] {
+  const list = (raw as { overallGfnSupportedLanguages?: unknown } | null)
+    ?.overallGfnSupportedLanguages
+  if (!Array.isArray(list)) return []
+  const out: string[] = []
+  for (const entry of list) {
+    const language = (entry as { language?: unknown } | null)?.language
+    if (typeof language === 'string' && /^[a-z]{2,3}(_[A-Za-z0-9]{2,4})?$/.test(language)) {
+      out.push(language)
+    }
+  }
+  return [...new Set(out)]
+}
+
+export async function fetchGameLanguages(config: GfnGraphQLConfig): Promise<string[]> {
+  return parseGameLanguages(
+    await execute<unknown>(config, 'overallGfnSupportedLanguages', GAME_LANGUAGES, {})
+  )
 }

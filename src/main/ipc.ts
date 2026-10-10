@@ -2,6 +2,11 @@ import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
 import { DONATION_URL } from '@shared/donate'
 import { isBluetoothAction, isBluetoothAddress } from '@shared/bluetooth'
+import {
+  isClientSettingChange,
+  type ClientSettingResult,
+  type ClientSettingsSnapshot
+} from '@shared/clientSettings'
 import type {
   AuthResult,
   AuthStatus,
@@ -39,17 +44,23 @@ import { armClientFullscreen, disarmClientFullscreen } from './gfn/present'
 import { launchViaWeb } from './gfn/webStream'
 import { getCatalog, markOwned, markSelected, patchGame, refreshCatalog } from './gfn/catalog'
 import { getDetails } from './gfn/details'
+import {
+  changeSetting,
+  getSettingsPage,
+  refreshSettingsPage,
+  resetSettingsPage
+} from './gfn/settingsPage'
 import type { GfnGraphQLConfig } from './gfn/graphql'
 import { listProviders, selectVariant, setOwned } from './gfn/library'
 import { syncProvider, type AlsConfig } from './gfn/als'
 import { readAlsServerUrl } from './gfn/appConfig'
 import {
   ensureSession,
-  getAlsToken,
-  invalidateSession,
+  getIdToken,
   isAuthenticated,
   signIn,
-  signOut
+  signOut,
+  withIdToken
 } from './gfn/session'
 import { updatePointerSettings } from './pointer'
 import { listRecent, recordPlay } from './recent'
@@ -226,6 +237,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // Remember that a browser session now exists, so a later start knows it
       // is worth reviving headlessly.
       await updateSettings({ gfnLinked: true })
+      // Possibly a different account: its membership is not the last one's.
+      await resetSettingsPage()
       return { ok: true, error: null }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'Sign-in failed' }
@@ -247,6 +260,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       console.error('Sign-out could not clear the stored session:', error)
     }
     await updateSettings({ gfnLinked: false })
+    await resetSettingsPage()
   })
 
   ipcMain.handle(IPC.catalogGet, async (): Promise<CatalogSnapshot> => getCatalog())
@@ -293,7 +307,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // GraphQL gateway and uses a different scheme; handing it to another
       // service is how a request gets rejected rather than authenticated.
       // `als.ts` strips the captured one for the same reason.
-      token: getAlsToken(),
+      token: getIdToken(),
       clientId: session.clientId,
       clientVersion: session.clientVersion,
       headers: session.headers
@@ -303,15 +317,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   /**
    * Syncs the given stores, re-capturing the session once if ALS refuses.
    *
-   * The ALS credential outlives neither the login nor the launcher's own idea
-   * of it: it has its own expiry, and it can be revoked server-side with no
-   * sign here until a 401 comes back. So a missing token is topped up before
-   * asking, and a wholesale refusal buys exactly one silent re-capture and one
-   * retry. Exactly one — a headless capture boots the entire GFN web app, and a
-   * loop of them behind a button press is worse than the error it is avoiding.
-   *
-   * A partial refusal is left alone: if one store accepted, the credential is
-   * fine and the others failed for reasons of their own.
+   * The retry rule is `withIdToken`'s, shared with the membership request. What
+   * counts as refused is this function's: a partial refusal is left alone — if
+   * one store accepted, the credential is fine and the others failed for
+   * reasons of their own.
    */
   async function syncWithRetry(
     session: GfnGraphQLConfig,
@@ -319,33 +328,24 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     gfnLinked: boolean,
     providerIds: string[]
   ): Promise<SyncResult[]> {
-    let live = session
-    if (!getAlsToken()) {
-      invalidateSession()
-      live = (await ensureSession(locale, gfnLinked)) ?? session
+    const run = async (live: GfnGraphQLConfig): Promise<SyncResult[]> => {
+      const config = await alsConfig(live)
+      return Promise.all(providerIds.map((providerId) => syncProvider(config, providerId)))
     }
 
-    const run = async (config: AlsConfig): Promise<SyncResult[]> =>
-      Promise.all(providerIds.map((providerId) => syncProvider(config, providerId)))
-
-    const config = await alsConfig(live)
-    let results = await run(config)
-    // Only worth re-capturing if the attempt actually carried a credential.
-    // Having just topped one up and come back empty, doing it again buys the
-    // same nothing at the price of a second headless boot.
-    const refused =
-      config.token !== null &&
-      results.every((result) => !result.accepted) &&
-      results.some((result) => result.status === 401)
-
-    if (refused) {
-      console.error(
-        `Library sync refused for ${providerIds.join(', ')}; re-capturing the session`
-      )
-      invalidateSession()
-      const fresh = await ensureSession(locale, gfnLinked)
-      if (fresh) results = await run(await alsConfig(fresh))
-    }
+    const results =
+      (await withIdToken(
+        locale,
+        gfnLinked,
+        run,
+        (attempt) =>
+          attempt.every((result) => !result.accepted) &&
+          attempt.some((result) => result.status === 401),
+        () =>
+          console.error(
+            `Library sync refused for ${providerIds.join(', ')}; re-capturing the session`
+          )
+      )) ?? (await run(session))
 
     for (const result of results) {
       // Never the response body: ALS is an authenticated service and its
@@ -481,6 +481,33 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // an unreachable status page must not cost the whole screen.
   ipcMain.handle(IPC.statusGet, async (): Promise<StatusSnapshot> => getStatus())
   ipcMain.handle(IPC.statusRefresh, async (): Promise<StatusSnapshot> => refreshStatus())
+
+  /**
+   * GeForce NOW's own settings. Three pulls — see `@shared/ipc`. None throws:
+   * a client that is not installed, a file that cannot be read and a host that
+   * refused the write all come back as a snapshot or a result carrying a
+   * sentence, the posture `status:get` takes.
+   */
+  ipcMain.handle(IPC.streamGet, async (): Promise<ClientSettingsSnapshot> => getSettingsPage())
+  ipcMain.handle(
+    IPC.streamRefresh,
+    async (_event, force: unknown): Promise<ClientSettingsSnapshot> =>
+      refreshSettingsPage(force === true)
+  )
+  ipcMain.handle(
+    IPC.streamUpdate,
+    async (_event, change: unknown): Promise<ClientSettingResult> => {
+      if (!isClientSettingChange(change)) {
+        return {
+          ok: false,
+          error: 'That change is not one the launcher knows.',
+          field: 'mode',
+          snapshot: await getSettingsPage()
+        }
+      }
+      return changeSetting(change)
+    }
+  )
 
   /**
    * Bluetooth. Five pulls, no push — see the note on these channels in

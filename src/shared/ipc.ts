@@ -40,6 +40,25 @@ export const IPC = {
    */
   statusZone: 'status:zone',
   /**
+   * GeForce NOW's own settings — stream quality, upscaling, DLSS overrides —
+   * read from and written into the client's `sharedstorage.json`.
+   *
+   * Three pulls, the `status:get` / `status:refresh` shape plus a write, and no
+   * push. A change made in the official app is picked up the way the Devices
+   * screen picks up a pairing: the page polls `stream:get` while it is open,
+   * and main answers an unchanged file with the last snapshot without reading
+   * it again. The renderer always knows it is watching, so this is the test the
+   * pushes below pass and this would not.
+   *
+   * `stream:update` carries one `ClientSettingChange`, checked for shape by
+   * `isClientSettingChange` and then judged by `applyChange` against the file
+   * as it is on disk and the membership main holds — so nothing the renderer
+   * sends can write a value the page would not have offered.
+   */
+  streamGet: 'stream:get',
+  streamRefresh: 'stream:refresh',
+  streamUpdate: 'stream:update',
+  /**
    * Bluetooth, and the five channels that are deliberately all pulls.
    *
    * `bluetooth:get` answers out of a model in `src/main/bluetooth/` that D-Bus

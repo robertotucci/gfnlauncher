@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { classifyHostFailure, hostCommand, hostEnvironment, printableCommand } from './host'
+import {
+  buildInPlaceWriteArgv,
+  classifyHostFailure,
+  hostCommand,
+  hostEnvironment,
+  printableCommand
+} from './host'
 
 /**
  * The stderr fragments below are transcribed from flatpak 1.18.1, not invented:
@@ -66,6 +72,40 @@ describe('hostCommand', () => {
     const [, produced] = hostCommand('flatpak', args, { sandboxed: false })
     produced.push('--columns=application')
     expect(args).toEqual(['ps'])
+  })
+})
+
+describe('buildInPlaceWriteArgv', () => {
+  const PATH =
+    '/home/u/.var/app/com.nvidia.geforcenow/.local/state/NVIDIA/GeForceNOW/sharedstorage.json'
+
+  it('rewrites the file in place, in one write, and on disk before it answers', () => {
+    expect(buildInPlaceWriteArgv(PATH)).toEqual([
+      'dd',
+      [`of=${PATH}`, 'bs=4M', 'iflag=fullblock', 'conv=notrunc,fsync', 'status=none']
+    ])
+  })
+
+  // `notrunc` is the whole point: without it there is an instant at which the
+  // client's inotify watch can read an empty file holding its own login.
+  it('only drops notrunc when asked to, for the recovery path', () => {
+    const [, args] = buildInPlaceWriteArgv(PATH, { truncate: true })
+    expect(args).toContain('conv=fsync')
+    expect(args.join(' ')).not.toContain('notrunc')
+  })
+
+  it('carries no payload in the argv, which is logged on failure', () => {
+    const [, args] = buildInPlaceWriteArgv(PATH)
+    expect(args.every((arg) => arg.startsWith('of=') || !arg.includes('/'))).toBe(true)
+  })
+
+  it('goes through the host like every other command when sandboxed', () => {
+    const [command, args] = buildInPlaceWriteArgv(PATH)
+    expect(hostCommand(command, args, { sandboxed: true })[1].slice(0, 3)).toEqual([
+      '--host',
+      '--',
+      'dd'
+    ])
   })
 })
 

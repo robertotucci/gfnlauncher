@@ -4,7 +4,7 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## Read these first
 
-**[ARCHITECTURE.md](./ARCHITECTURE.md) is the primary reference** and carries what used to live in this file: the three Electron contexts, the input and focus model, the GeForce NOW integration, the four backends, the two caches, the design rules, power and autostart. Read the section covering the area you are about to change *before* changing it — nearly every non-obvious line in this codebase is non-obvious deliberately, and the reasoning is recorded there.
+**[ARCHITECTURE.md](./ARCHITECTURE.md) is the primary reference** and carries what used to live in this file: the three Electron contexts, the input and focus model, the GeForce NOW integration, the five backends, the two caches, the design rules, power and autostart. Read the section covering the area you are about to change *before* changing it — nearly every non-obvious line in this codebase is non-obvious deliberately, and the reasoning is recorded there.
 
 Two more:
 
@@ -22,6 +22,8 @@ Two more:
 - The `persist:gfn-session` partition under the launcher's own `userData`.
 
 Grep them, never cat them, and never quote a matched line wholesale. `parseZoneAssignment` in `src/main/status/zone.ts` returns six declared fields for this reason, and `zone.test.ts` asserts that key set — do not widen either.
+
+`sharedstorage.json` is also **written**: `src/main/gfn/clientSettings.ts` mirrors the client's streaming settings into it, in place through the host, re-serialising only `appSettingsConfig`. `parseClientSettings` and `parseEntitlements` (the MES membership answer, which names the subscription) have the same key-set guards. Never log what either reads, and never write that file any other way — ARCHITECTURE.md, "The client's settings", says why.
 
 **Do not re-litigate the rejected approaches.** `docs/gfn-api.md` records the evidence for each dead end (reusing the desktop client's on-disk token, borrowing GFN's OAuth client, registering our own, the `keywords` field as an RTX source, `prod/v2/serverInfo` on the status path). Reopening one needs new information, not a fresh guess.
 

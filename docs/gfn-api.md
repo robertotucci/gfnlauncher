@@ -739,6 +739,21 @@ Normal operation is still *link once, sync many*: link a store, GFN pulls the wh
 library, and new catalog titles the user already owns appear on their own. These
 mutations are the manual override, not the main path.
 
+### Game languages
+
+```graphql
+query GetOverallGfnSupportedLanguages{
+  overallGfnSupportedLanguages {
+    language
+  }
+}
+```
+
+Under `requestType=overallGfnSupportedLanguages`, from the client's LCARS query
+table. Locale codes (`af_ZA`, `it_IT`, …), 69 of them in October 2026 — the list
+behind the "Game language" setting. Answered with the session's cookies; read by
+`fetchGameLanguages` in `library.ts`.
+
 ## ALS — Account Linking Service
 
 A separate REST service from the GraphQL API. Base URL comes from the client's
@@ -866,11 +881,13 @@ client's profile, no OAuth client is borrowed, and none is registered. It is the
 same act as the header interception that already happens, against a different
 store in the same window.
 
-`readIdToken` in `webAuth.ts` is the pure half and is tested; `getAlsToken` in
+`readIdToken` in `webAuth.ts` is the pure half and is tested; `getIdToken` in
 `session.ts` withholds the token once its `exp` has passed, so a stale one is
 recognised before ALS has to say so. On a 401 anyway — the token can be revoked
-server-side with no other sign — `ipc.ts` invalidates the session, re-captures
-**once**, and retries. Once, because a headless capture boots the whole web app.
+server-side with no other sign — `withIdToken` invalidates the session,
+re-captures **once**, and retries. Once, because a headless capture boots the
+whole web app. The membership service (below) takes the same token under the
+`GFNJWT` scheme and goes through the same `withIdToken`.
 
 `als.ts` still filters `Authorization` out of the replayed capture headers: that
 one is the GFNJWT scoped to `apps.gxn.nvidia.com`, and forwarding it repeats the
@@ -1029,6 +1046,7 @@ The Flatpak has `shared=network`, so the port is reachable from the host.
 | Purpose | Host |
 | --- | --- |
 | Session / zone matching | `prod.cloudmatchbeta.nvidiagrid.net` |
+| Membership (MES) | `mes.geforcenow.com` — see *Membership* below |
 | Cloud variables | `api.gdn.nvidia.com/cloudvariables/v3` |
 | Telemetry | `events.telemetry.data.nvidia.com`, `telemetry.gfe.nvidia.com` |
 | Tracing | `prod.otel.kaizen.nvidia.com` |
@@ -1191,6 +1209,12 @@ the *app subdirectory*, so it is not visible from the sandbox.
 the bundle.** They are how the `routingOverride` semantics above were confirmed
 rather than guessed.
 
+**They are gone as of 2.0.89.141** — `find <installPath> -name '*.map'` finds
+nothing. The streaming-settings and membership facts below were read out of the
+minified bundles instead (`main.*.js`, `25.*.js`, `794.*.js`, `vendor.*.js`) and
+the `en_US` strings under `assets/i18n/`, with bounded `grep -o` windows; module
+names quoted below are the ones the minified code still carries.
+
 ### `prod/v2/serverInfo` — investigated, deliberately unused
 
 `GET https://prod.cloudmatchbeta.nvidiagrid.net/v2/serverInfo` → 200,
@@ -1208,6 +1232,190 @@ exactly and offline, so this would only earn a request when there is no
 `zoneName` at all — GFN installed but never streamed — and in that case the
 honest answer is "start a game once" rather than a region guess. Recorded here
 in case that judgement needs revisiting.
+
+## Membership — MES
+
+What the account's membership allows: the resolution × frame-rate pairs, the
+custom bit-rate range, colour depth, chroma, HDR, Reflex, VRR, L4S, the AI
+filter, HUD streaming, DLSS overrides, in-game settings persistence. The client
+builds its whole streaming Settings page from this answer, and validates a
+custom profile against it at launch — so the launcher's streaming page asks the
+same question. Read by `src/main/gfn/membership.ts`.
+
+```
+GET {nes.server}/{nes.version}/subscriptions?serviceName=gfn_pc&languageCode=<locale>&vpcId=<vpcId>
+Authorization: GFNJWT <Starfleet id token>
+NV-Client-Type: NATIVE
+NV-Client-Streamer: NVIDIA-CLASSIC
+NV-Device-OS: LINUX
+NV-Device-Type: DESKTOP
+NV-Device-Make: UNKNOWN
+NV-Device-Model: UNKNOWN
+NV-Client-ID: <lcars.clientId>
+NV-Client-Version: <installed client version>
+```
+
+- **`nes.*` is in the client's `config.json`** — `server`
+  `https://mes.geforcenow.com`, `version` `v4`, `serviceName` `gfn_pc` on
+  2.0.89.141. `createAndCallNesServerAPI` builds `[nes.server, version, path]`
+  and defaults `serviceName: "gfn_pc"` on every MES call, browser build included.
+- **The token is the Starfleet `idToken`**, the one `webAuth.ts` already reads
+  for ALS: `getVpcIdLocaleAndToken` → `idmService.getAuthToken` →
+  `StarfleetService.getAuthToken` → `session.data.idToken`, sent by the MES SDK's
+  `createHeader` as `GFNJWT ${token}`.
+- **No `userId`.** The client sends one (`{languageCode, vpcId, userId}`);
+  measured, MES answers 200 without it, and the launcher does not derive it.
+- **`NV-Client-ID` is `lcars.clientId`** — the header service's
+  `getClientIdHeaderValue` for `withClientId: "lcars"`.
+
+### The client-type headers decide the answer
+
+The header service (`getCommonHeaders`) has two branches. On
+`isBrowserPlatform()` it sends `NV-Client-Type: BROWSER`,
+`NV-Client-Streamer: WEBRTC` and `NV-Browser-Type`; otherwise `NATIVE`,
+`NVIDIA-CLASSIC`, the OS (`getSupportedOSName` → `LINUX`) and a device type
+(`DESKTOP` for anything not a phone, tablet, TV or console), with `UNKNOWN` as
+the model and make fallbacks. **The launcher's session is captured from the web
+player, so its replayable headers are the browser branch** — and MES answers
+each branch with a different membership. Measured on 10 October 2026 for the
+same Ultimate account, same token, same minute:
+
+| | browser headers (captured) | native headers |
+| --- | --- | --- |
+| resolutions | 24, max 1920 × 1200 | 80 pairs, up to 5120 × 2880 @ 120, 1920 × 1080 @ 360 |
+| `ENABLED_FPS` | 30, 60 | 30, 60, 120, 240, 360 |
+| Balanced bit rate | 5–75 | 5–100 |
+| `ENABLED_REFLEX`, `ENABLED_L4S`, `HUD_STREAMING` | absent | `true` |
+| `BIT_DEPTH` / chroma | 8 only / 4:2:0 only | 10 and 8 / 4:2:0 and 4:4:4 |
+| `SUPPORTED_AUDIO_FORMATS` | `STEREO` | `UP_TO_7_1_SURROUND_PCM` |
+
+Replaying the capture would not have failed — it would have offered a quarter
+of the options, plausibly. `buildSubscriptionsRequest` keeps the neutral
+captured headers (`Accept`, `User-Agent`, the tracing pair) and replaces every
+`NV-*` one; `membership.test.ts` pins that.
+
+### Response shape (keys only — the answer also identifies the subscription)
+
+```
+membershipTier: "ULTIMATE"           membershipType, type, subType, productSku, productUri,
+subscriptionId, renewalDateTime, remainingTimeInMinutes, …   ← account data, not kept
+features:
+  features: [ { key, textValue | setValue } ]
+  resolutions: [ { widthInPixels, heightInPixels, framesPerSecond, isEntitled } ]
+streamingQualities: [
+  { clientStreamingQualityMode: "BALANCED" | "DATA_SAVER" | "COMPETITIVE" | "CINEMATIC",
+    resolution: { widthInPixels, heightInPixels, framesPerSecond },   ← what the preset asks for
+    maxBitRate: { bitrateOption, bitrateValue, minBitrateValue, maxBitrateValue },
+    features: [ { key: "PROFILE_VSYNC" | "PROFILE_ADJUST_FOR_NETWORK" | "PROFILE_ADJUST_FOR_NETWORK_MODE"
+                     | "PROFILE_HDR" | "PROFILE_HDR_VERSION" | "PROFILE_REFLEX" | "PROFILE_CLOUD_GSYNC"
+                     | "PROFILE_L4S" | "PROFILE_BIT_DEPTH" | "PROFILE_CHROMA_FORMAT"
+                     | "PROFILE_DL_PREFILTERING" | "PROFILE_HUD_STREAMING", textValue } ] } ]
+addons, upsells, notifications, iapProviderDetails, …
+```
+
+How the client reads `features.features` (its `EcommerceService`), and so how
+`parseEntitlements` does:
+
+- **`featureEntitled(key)`** — `JSON.parse(textValue)`: a JSON array is entitled
+  when non-empty, anything else is its truthiness. `ENABLED_REFLEX`,
+  `ENABLED_L4S`, `CLOUD_GSYNC`, `HUD_STREAMING`, `HDR_ENABLED`,
+  `IN_GAME_SETTINGS_PERSISTENCE_ENABLED`, `SUPPORTED_DLSS_OVERRIDE_{FG,SR,RR}`.
+- **`featureArrayItemEntitled(key, value)`** — a `textValue` holding a JSON array
+  of `{value, isEntitled}` (`BIT_DEPTH`: `"10"`, `"8"`;
+  `SUPPORTED_CHROMA_FORMAT`: `"YUV420"`, `"YUV444"`;
+  `SUPPORTED_DLSS_FG_MULTIPLIERS`: `"3X"` … `"6X"`), else a `setValue`.
+- **`featureSetValueEntitled(key)`** — a non-empty `setValue`.
+  `SUPPORTED_HDR_VERSION` is `["OFF"]` for this account on Linux: the HDR menu
+  has nothing to offer, yet the reset check (`isCustomModeFeaturesEntitled`)
+  passes, because it only asks for a non-empty list.
+- **`SUPPORTED_DL_PREFILTERING`** is a `setValue` of `OFF` / `AUTO` / `CUSTOM`.
+- The custom bit-rate slider's range is the **BALANCED** quality's
+  `maxBitRate.{min,max}BitrateValue` (`updateMaxBitrate`); fallback 5–75.
+- A preset seeded from a quality (`getStreamingProfileFromStreamingQuality`):
+  `maxBitrateAuto = !bitrateOption`, `maxBitrate = bitrateValue`, and the
+  `PROFILE_*` features onto `vSync`, `hdrStreamingMode`, `reflex`, …
+
+## The client's settings — `appSettingsConfig`
+
+The official app's Settings page persists to the same `sharedstorage.json` as
+the datacenter above (`persistToJSONKeys` includes `appSettingsConfig`), written
+by the app's `settingsService` as one block: `readBlock("appSettingsConfig")`,
+change, `writeBlock("appSettingsConfig", wholeBlock)`. Read and written by
+`src/main/gfn/clientSettings.ts`; the rules are `src/shared/clientSettings.ts`.
+
+> ⚠️ `appSettingsConfig.customProfile.networkInfo` holds `IPAddress`,
+> `GatewayIP`, `MACAddress` and `RouterMACAddress`. The parser never returns it.
+
+### Fields
+
+Top level — labels are the client's `en_US` strings:
+
+| Field | Values |
+| --- | --- |
+| `streamingProfiles` | `balanced` · `dataSaver` · `competitive` · `cinematic` · `custom`. Missing means `balanced`. Listed only if `client.supportedStreamingProfiles[mode]` and the membership has the matching quality; `custom` streams through BALANCED. |
+| `networkQuality` | 1 "Only show warnings" (default, also when missing) · 0 off. A stored 2 reads as off. |
+| `clipboardPaste` | bool; when missing the clipboard service writes `client.clipboardConfig.isClipboardEnabled` (true). |
+| `inGameGraphics` | bool, gated by `IN_GAME_SETTINGS_PERSISTENCE_ENABLED`. |
+| `preferredGameLanguage` | `"auto-<locale>"` or `"<locale>"`; missing is Auto. List: `overallGfnSupportedLanguages`. |
+| `upScalingResolutionId` | 0 Standard · 1 Enhanced · 2 AI-enhanced. **Ignored and reset to `resolutionUpscalingConfig.defaultOptionId` (0) at every start unless `upscalingModeUpdatedByUser` is true.** |
+| `enhancedSharpnessValue`, `aiSharpnessValue` | the stored number is the option's *value*: 4 Off · 0 Low · 2 Medium · 3 High; unknown reads as Low. |
+| `dlssOverrides` | `{ modelPresetMode: inGame/recommended/custom, srMode, srScale, srModel, rrModel, fgMode, fgModel, fgMultiplier, customSrModel, customRrModel, customFgModel }`. **Top level** — the launch reads `settingsBlock.dlssOverrides`; the copy the custom editor leaves inside `customProfile` is not read. |
+| `discordRpEnabled`, `playWithMobileNetwork`, `advancedLatencyOptimization`, `udsSnoozeStopDateTime` | not mirrored: hidden on Linux (`linuxOSConfig.featureEnablement.discordRichPresence: false`), mobile-only (`checkMobileDataUsage`), derived from Competitive, and not a setting. |
+
+`customProfile` — what the launch reads (`getStreamingProfile`):
+
+| Field | Values |
+| --- | --- |
+| `width`, `height`, `fps` | numbers, matched exactly (`===`) against the membership × device list |
+| `maxBitrate`, `maxBitrateAuto` | Mbps (×1000 at launch); Auto is `0` + `true` |
+| `codec` | 0 Auto · 1 H.264 · 2 H.265 · 3 AV1; falls back 3→2→1 at launch on a device that cannot decode it |
+| `bitDepth`, `chromaFormat` | 8/10 × 0 (4:2:0) / 1 (4:4:4) |
+| `hdrStreamingMode` | `"OFF"` · `"HDR"` · `"HDR10_PLUS_GAMING"`. **Missing reads as not-OFF** (`ue.hdrStreamingMode !== OFF`) and is not in the built-in preset — always write it. |
+| `vSync` | 0 Off · 1 On · 2 Adaptive |
+| `reflex`, `cloudGsync`, `l4sEnabled`, `hudStreaming` | bool; `hudStreaming` is requested as mode 1 |
+| `dynamicStreamingMode` | 1 Optimal latency · 2 Optimal quality · 0 No adjustment; with `client.displayAllDynamicStreamingModes` false, 3 On · 0 Off |
+| `prefilter`, `sharpen`, `denoise` | 0 Off · 1 Auto · 2 Custom; 0–10 each, used with Custom |
+
+`aspectRatio` (nearest of the client's table) and `dataUsage` (GB/h — the SDK's
+formula; 100 Mbps @ 60 fps = 29) are display-only. `audioMode`,
+`hudStreamingMode`, `displayDpi`, `primaryDisplayResolution`, `networkInfo`,
+`name`, `description`, `profile` are copied artefacts or recomputed at launch.
+
+### The reset
+
+At launch with `streamingProfiles: "custom"`, `isCustomDataInSubscription`
+requires the exact width × height × fps in the available list (entitled *and*
+device-supported) and `isCustomModeFeaturesEntitled`: VRR, HDR (any
+`SUPPORTED_HDR_VERSION` or `HDR_ENABLED`), Reflex, L4S and a non-8 bit depth
+each entitled if set. Failing either, the client **deletes `customProfile`**,
+logs "Custom mode reset due to values outside entitlement", and streams the
+Balanced preset — `streamingProfiles` stays `"custom"`. The official editor's
+RESET deletes it the same way. Device-dependent features (HDR display, VRR
+display, decoder, refresh rate) are *adapted* at launch rather than reset; the
+device capabilities the client uses are logged only in `console.log`, which
+carries tokens.
+
+### Writing it from outside — measured
+
+On 10 October 2026, client 2.0.89.141, with the client running:
+
+- The file's inode had not changed since the install (9 August): **the client
+  rewrites it in place.** Compact JSON, keys sorted at every level (nlohmann).
+- The native binary carries `SharedStorage::SharedStorageWatcher` (inotify on
+  `/sharedstorage.json`) and `BrowserApp::SharedStorageWatcherCallbackImpl`. An
+  in-place outside write of `customProfile.maxBitrate` 100 → 95 at
+  21:51:38.687 was followed by the web app's `shared storage cache updated` at
+  21:51:38.698, and the official Settings page showed 95.
+- The client then wrote `appSettingsConfig` itself (VSync changed in its UI) and
+  kept the 95; wrote `networkConfig` and `remoteOverrides` (server location
+  changed) and kept a later 90 — so its native memory reloads outside writes too,
+  rather than reverting them on its next write of any block.
+- An outside write immediately followed by `flatpak kill` survived.
+- The client's own writes truncate: the padding of an earlier padded write was
+  gone after its next one.
+- Re-serialising the whole file with `JSON.stringify` changes four float
+  timestamps (`1.787350324591e+12` → integer) and nothing else; the launcher
+  avoids even that by splicing only the `appSettingsConfig` value.
 
 ## Runtime logs
 

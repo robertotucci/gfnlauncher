@@ -2,12 +2,18 @@ import { unwatchFile, watchFile, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
+import type { ClientSettings } from '@shared/clientSettings'
 import { IPC } from '@shared/ipc'
 import type { GfnClientInfo, ZoneStatus } from '@shared/types'
 import { resetAppConfig } from './gfn/appConfig'
+import { customProfileDropped, readClientSettings } from './gfn/clientSettings'
+import { clientStoragePath } from './gfn/clientState'
 import { detectGfn, GFN_APP_ID, sameClient } from './gfn/flatpak'
+import { noteCustomProfileReset } from './gfn/settingsPage'
+import { notify } from './notify'
+import { screenOwnership, watchScreenOwnership } from './screen'
 import { currentZone } from './status'
-import { readZoneAssignment, sameZone, zoneStoragePath } from './status/zone'
+import { readZoneAssignment, sameZone } from './status/zone'
 
 /**
  * Following the GeForce NOW client while it changes underneath us.
@@ -51,10 +57,17 @@ import { readZoneAssignment, sameZone, zoneStoragePath } from './status/zone'
  * **deliberately not used**: the manifest grants the *app subdirectory*, so
  * that file is not visible from inside our own sandbox at all.
  *
- * And `sharedstorage.json`, for the datacenter. Note that the client rewrites
- * it for reasons that have nothing to do with routing — token rotation,
- * telemetry, consent — which is why `sameZone` compares the resolved zone
- * rather than trusting the write.
+ * And `sharedstorage.json`, for the datacenter and for the streaming settings.
+ * Note that the client rewrites it for reasons that have nothing to do with
+ * either — token rotation, telemetry, consent — which is why `sameZone`
+ * compares the resolved zone rather than trusting the write, and why the one
+ * streaming fact watched here is a transition: the custom profile vanishing.
+ *
+ * That transition is the client deleting a custom profile it would not stream
+ * (`customProfileDropped`), and it is announced — but only once the launcher
+ * has the screen again, because it happens at launch, under a stream that is
+ * starting, where a card would be the wrong thing to draw. The streaming page
+ * itself is not pushed: it polls while it is open, see `@shared/ipc`.
  *
  * **`watchFile`, not `watch`**, for the three reasons already written out in
  * `gfn/streamLog.ts`: an atomic replace moves the inode out from under inotify,
@@ -161,8 +174,8 @@ const DEPLOY_POINTER = ['app', GFN_APP_ID, 'current', 'active'] as const
 /**
  * The deploy pointer in both flatpak installation roots, per-user first.
  *
- * A function taking `home`, for the same reason as `zoneStoragePath()` and
- * `streamLogPath()`. Tested because a wrong string here fails **completely
+ * A function taking `home`, for the same reason as `clientStoragePath()` in
+ * `gfn/clientState.ts`. Tested because a wrong string here fails **completely
  * silently**: the watch arms against a path that will never change, nothing
  * throws, nothing is logged, and the feature simply does not exist. These two
  * must agree with the `--filesystem=…:ro` grants in
@@ -204,6 +217,37 @@ const COALESCE_MS = 250
 /** One watch at a time, module-level — the same shape as `active` in `handback.ts`. */
 let active: { stop: () => void } | null = null
 
+/** A reset seen while somebody else had the screen, waiting to be told. */
+let resetPending = false
+/** `watchScreenOwnership` cannot be undone, so it is registered once per process. */
+let resetWatchArmed = false
+
+/**
+ * Tells the user GeForce NOW threw the custom profile away — now if the
+ * launcher is what is on screen, otherwise the moment it is again.
+ *
+ * The reset happens when a game launches, so "now" is nearly always "under a
+ * stream that is starting", where the overlay would steal the focus from the
+ * client for three and a half seconds to say something that can wait. Held,
+ * it lands on the launcher when the game ends, beside the page that undoes it.
+ */
+function announceReset(): void {
+  resetPending = true
+  if (!resetWatchArmed) {
+    resetWatchArmed = true
+    watchScreenOwnership(flushReset)
+  }
+  flushReset()
+}
+
+function flushReset(): void {
+  if (!resetPending) return
+  const { handedOff, minimised } = screenOwnership()
+  if (handedOff || minimised) return
+  resetPending = false
+  notify({ kind: 'stream-profile-reset' })
+}
+
 /** Idempotent, and safe when nothing is armed. */
 export function disarmClientWatch(): void {
   active?.stop()
@@ -221,7 +265,7 @@ export function disarmClientWatch(): void {
 export function armClientWatch(getWindow: () => BrowserWindow | null): void {
   disarmClientWatch()
 
-  const zonePath = zoneStoragePath()
+  const zonePath = clientStoragePath()
   const deployPaths = deployPointerPaths()
 
   const marks = new Map<string, FileMark>()
@@ -238,6 +282,12 @@ export function armClientWatch(getWindow: () => BrowserWindow | null): void {
   let sentZone: ZoneStatus | null = null
   /** Whether a zone read error has already been held back once. See `refreshZone`. */
   let zoneErrorHeld = false
+  /**
+   * The streaming settings as last read, for `customProfileDropped`. Seeded at
+   * arm time, so a profile the client dropped before the launcher started is
+   * not announced, and one it drops afterwards is.
+   */
+  let streamSettings: ClientSettings | null = null
 
   const stop = (): void => {
     if (stopped) return
@@ -321,6 +371,18 @@ export function armClientWatch(getWindow: () => BrowserWindow | null): void {
     if (send(IPC.statusZone, zone)) sentZone = zone
   }
 
+  const refreshStreamSettings = async (): Promise<void> => {
+    const read = await readClientSettings(zonePath)
+    // A file caught mid-write is not evidence of anything; keep the last one.
+    if (stopped || !read.ok) return
+    if (customProfileDropped(streamSettings, read.settings)) {
+      console.warn('GeForce NOW reset the custom stream settings')
+      noteCustomProfileReset()
+      announceReset()
+    }
+    streamSettings = read.settings
+  }
+
   const derive = async (): Promise<void> => {
     const deployMoved = deployPending
     const zoneMoved = zonePending
@@ -331,6 +393,7 @@ export function armClientWatch(getWindow: () => BrowserWindow | null): void {
     // Also on a deploy move: installing or removing the client is the one thing
     // that makes its configuration appear or disappear.
     if (!stopped && (zoneMoved || deployMoved)) await refreshZone()
+    if (!stopped && zoneMoved) await refreshStreamSettings()
   }
 
   const run = (): void => {
@@ -374,6 +437,10 @@ export function armClientWatch(getWindow: () => BrowserWindow | null): void {
     watches.push({ path, listener })
     watchFile(path, { interval, persistent: false }, listener)
   }
+
+  void readClientSettings(zonePath).then((read) => {
+    if (!stopped && read.ok && streamSettings === null) streamSettings = read.settings
+  })
 
   watch(zonePath, ZONE_POLL_MS, () => {
     zonePending = true

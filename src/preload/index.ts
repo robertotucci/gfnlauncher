@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { BluetoothAction } from '@shared/bluetooth'
+import type { ClientSettingChange } from '@shared/clientSettings'
 import type { ScreenOwnership } from '@shared/input'
 import type { Notice } from '@shared/notify'
 import type {
@@ -49,6 +50,11 @@ const api: LauncherApi = {
     status: () => ipcRenderer.invoke(IPC.authStatus),
     signIn: () => ipcRenderer.invoke(IPC.authSignIn),
     signOut: () => ipcRenderer.invoke(IPC.authSignOut)
+  },
+  clientSettings: {
+    get: () => ipcRenderer.invoke(IPC.streamGet),
+    refresh: (force?: boolean) => ipcRenderer.invoke(IPC.streamRefresh, force === true),
+    update: (change: ClientSettingChange) => ipcRenderer.invoke(IPC.streamUpdate, change)
   },
   status: {
     get: () => ipcRenderer.invoke(IPC.statusGet),

@@ -85,9 +85,10 @@ export function setHandedOff(next: boolean, reason: string): void {
 /**
  * The same fact the renderer is pushed, for a caller inside main.
  *
- * One consumer: `notify.ts`, which has to decide whether a notice can be drawn
+ * Two consumers: `notify.ts`, which has to decide whether a notice can be drawn
  * in the launcher's own window or needs the overlay that draws over whatever is
- * in front. It reads the fact and never sets it — the setters stay paired at
+ * in front, and `clientWatch.ts`, which holds a stream-settings reset until the
+ * launcher has the screen back. Both read the fact and never set it — the setters stay paired at
  * their call sites in `ipc.ts`, which is what keeps the latch from sticking.
  *
  * Note that `focused` is deliberately absent here as it is from
@@ -102,15 +103,17 @@ export function screenOwnership(): ScreenOwnership {
 /**
  * The same transitions, for a caller inside main.
  *
- * One consumer, and it is not an optimisation. `notify.ts` picks a surface per
+ * Two consumers. `clientWatch.ts` waits on it to announce a stream-settings
+ * reset once the launcher is back in front. The first is not an optimisation
+ * either: `notify.ts` picks a surface per
  * notice from the value above, and a notice is on screen for three and a half
  * seconds — long enough for a game to start underneath it. Without this the
  * card would stay painted on a window that has just gone behind a stream and
  * come back into view whole when the game ends, because nothing else would ask
  * again until its own timer next fired.
  *
- * Registration only; there is no way to stop watching, because the one watcher
- * is armed for the life of the process alongside the window it draws into.
+ * Registration only; there is no way to stop watching, because both watchers
+ * are armed once for the life of the process.
  */
 export function watchScreenOwnership(listener: () => void): void {
   watchers.push(listener)

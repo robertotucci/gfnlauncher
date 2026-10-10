@@ -13,15 +13,15 @@ import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
 /**
- * `devices` is a view with no rail item, and the only one.
+ * `devices` and `stream` are views with no rail item, and the only two.
  *
- * It is reached from a Settings row and B goes back there, so it behaves like a
- * page of Settings rather than a destination of its own — which is also why the
+ * Each is reached from a Settings row and B goes back there, so each behaves
+ * like a page of Settings rather than a destination of its own — which is also why the
  * rail keeps Settings marked while it is up. A seventh button was the obvious
  * alternative and does not fit: this rail has no overflow handling, and at 175%
  * interface scale the seven controls already here are taller than a 1080p
- * screen. Pairing a headset is a thing you do twice a year; it must not cost a
- * permanent slot in the one piece of chrome that is always on screen.
+ * screen. Pairing a headset or changing the bit rate is a thing you do rarely; it
+ * must not cost a permanent slot in the one piece of chrome that is always on screen.
  */
 export type View =
   | 'recent'
@@ -30,13 +30,17 @@ export type View =
   | 'status'
   | 'settings'
   | 'devices'
+  | 'stream'
   | 'support'
 
 // Recent goes first because it is the shortest path back to what the user was
 // already playing, which is the most likely reason the launcher is open at all.
 // Navigation is geometric, not DOM-ordered, so the position is purely editorial.
-/** Only the views that have a button. `devices` deliberately has none. */
-type RailView = Exclude<View, 'devices'>
+/**
+ * Only the views that have a button. The two pages of Settings — `devices` and
+ * `stream` — deliberately have none, for the reason in the header.
+ */
+type RailView = Exclude<View, 'devices' | 'stream'>
 
 const ITEMS: { id: RailView; label: string; Icon: typeof LayoutGrid; tint?: string }[] = [
   { id: 'recent', label: 'Recent', Icon: History },
@@ -133,9 +137,10 @@ export function NavRail({
   onSelect: (view: RailView) => void
   onPower: () => void
 }): ReactNode {
-  // Devices is a page of Settings that happens to fill the screen, so the rail
-  // keeps naming where the user came from and where B will put them back.
-  const marked: RailView = view === 'devices' ? 'settings' : view
+  // Devices and Streaming quality are pages of Settings that happen to fill the
+  // screen, so the rail keeps naming where the user came from and where B will
+  // put them back.
+  const marked: RailView = view === 'devices' || view === 'stream' ? 'settings' : view
 
   return (
     <nav className="border-border/60 flex w-24 shrink-0 flex-col gap-1.5 border-r px-2 py-6">

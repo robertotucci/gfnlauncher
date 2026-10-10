@@ -563,6 +563,80 @@ export async function hostFileExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Runs a host command to completion with `input` on its stdin.
+ *
+ * The same contract as `hostExecFile` — same routing, same `HOST_TIMEOUT_MS`,
+ * same classification and the same one warning on failure — for the commands
+ * whose payload cannot be an argument: it is large, it is multi-line, and in the
+ * case of the client's settings it sits beside a live token, so it must never
+ * appear in an argv that `printableCommand` would log. `execFile` takes no
+ * stdin, hence `spawn`; a timeout kills the child and rejects with `killed`, so
+ * `classifyHostFailure` reads it as the `timeout` it is.
+ */
+export async function hostExecWithInput(
+  command: string,
+  args: readonly string[],
+  input: string | Buffer,
+  options: HostCommandOptions = {}
+): Promise<void> {
+  const { env, sandboxed = IS_SANDBOXED, timeoutMs = HOST_TIMEOUT_MS, quiet = false } = options
+  const [outer, outerArgs] = hostCommand(command, args, { env, sandboxed })
+  const startedAt = Date.now()
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(outer, outerArgs, {
+        stdio: ['pipe', 'ignore', 'pipe'],
+        // Sandboxed, `env` is already `--env=` flags on the argv; this is only
+        // flatpak-spawn's own environment, kept clean for the reason in
+        // `hostEnvironment`.
+        env: hostEnvironment(process.env, sandboxed ? undefined : env)
+      })
+
+      let stderr = ''
+      let killed = false
+      const timer = setTimeout(() => {
+        killed = true
+        child.kill('SIGTERM')
+      }, timeoutMs)
+
+      child.stderr?.on('data', (chunk) => {
+        stderr += String(chunk)
+      })
+      child.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.once('close', (code) => {
+        clearTimeout(timer)
+        if (code === 0 && !killed) resolve()
+        else
+          reject(
+            Object.assign(new Error(`${command} exited ${code ?? 'on a signal'}`), {
+              stderr,
+              code,
+              killed
+            })
+          )
+      })
+      // A child that exits before reading everything raises EPIPE here, after
+      // `close` has already said what happened. Nothing to add to that.
+      child.stdin?.on('error', () => undefined)
+      child.stdin?.end(input)
+    })
+  } catch (error) {
+    const failure = classifyHostFailure(error, sandboxed)
+    if (!quiet || failure.kind === 'blocked' || failure.kind === 'timeout') {
+      console.warn(
+        `Host command failed (${failure.kind}, ${Date.now() - startedAt} ms): ` +
+          `${printableCommand(outer, outerArgs)} — ${failure.message}`
+      )
+    }
+    throw error
+  }
+}
+
 /** Writes `contents` to a host path, creating the parent directory. */
 export async function hostWriteFile(path: string, contents: string): Promise<void> {
   if (!IS_SANDBOXED) {
@@ -574,27 +648,53 @@ export async function hostWriteFile(path: string, contents: string): Promise<voi
   await hostExecFile('mkdir', ['-p', dirname(path)])
   // Through stdin rather than as an argument: the payload is multi-line and
   // contains characters a shell would reinterpret, and `tee` needs no shell at
-  // all — `flatpak-spawn` execs it directly.
-  await new Promise<void>((resolve, reject) => {
-    const [outer, outerArgs] = hostCommand('tee', [path])
-    const child = spawn(outer, outerArgs, {
-      stdio: ['pipe', 'ignore', 'pipe'],
-      env: hostEnvironment()
-    })
+  // all — `flatpak-spawn` execs it directly. `tee` echoes to stdout, which
+  // `hostExecWithInput` discards.
+  await hostExecWithInput('tee', [path], contents)
+}
 
-    let stderr = ''
-    child.stderr?.on('data', (chunk) => {
-      stderr += String(chunk)
-    })
-    child.once('error', reject)
-    child.once('close', (code) =>
-      code === 0
-        ? resolve()
-        : reject(Object.assign(new Error(`tee exited ${code}`), { stderr, code }))
-    )
-
-    child.stdin?.end(contents, 'utf8')
-  })
+/**
+ * The argv that rewrites a host file **in place**, from stdin.
+ *
+ * In place, and not through `writeFileAtomic`'s sibling-and-rename, because the
+ * one file this exists for is not ours: it is GeForce NOW's `sharedstorage.json`.
+ * The client rewrites it in place itself — its inode has not changed since the
+ * install — and its native `SharedStorageWatcher` watches it with inotify, which
+ * follows an inode. A rename would hand the client a file its watch is not on.
+ * And sandboxed, the directory is a read-only grant, so a sibling cannot be
+ * created there at all: the write has to be a host process opening the path.
+ *
+ * - `conv=notrunc` — the file is never truncated, so there is no instant at
+ *   which the client's watcher could read it empty. The caller pads the payload
+ *   with trailing spaces to at least the old length, which JSON permits.
+ * - `bs=4M iflag=fullblock` — one block is read whole from the pipe before
+ *   anything is written, so the file changes in one `write(2)` rather than in
+ *   512-byte steps the watcher could fire between. The file is ~20 KB.
+ * - `conv=fsync` — on disk before `dd` reports success, because the caller
+ *   re-reads to confirm and a power menu is one press away.
+ * - `status=none` — the transfer summary is not a diagnostic anyone needs.
+ *
+ * `truncate` is for the one recovery path, where the file grew under us between
+ * read and write and a padded shorter payload left a tail: there, a truncating
+ * write is the lesser evil, and it is the client's own way of writing anyway.
+ *
+ * Pure and pinned by a test, per CONTRIBUTING: this is text another process
+ * executes against a file holding somebody's login.
+ */
+export function buildInPlaceWriteArgv(
+  path: string,
+  { truncate = false }: { truncate?: boolean } = {}
+): [command: string, args: string[]] {
+  return [
+    'dd',
+    [
+      `of=${path}`,
+      'bs=4M',
+      'iflag=fullblock',
+      truncate ? 'conv=fsync' : 'conv=notrunc,fsync',
+      'status=none'
+    ]
+  ]
 }
 
 /** Removes a host path, succeeding when it was already gone. */

@@ -79,19 +79,65 @@ export function isAuthenticated(): boolean {
 }
 
 /**
- * The credential ALS wants, which is not the one GraphQL uses.
+ * The Starfleet id token — the credential ALS and MES want, which is not the
+ * one GraphQL uses.
  *
  * GraphQL rides on the partition's cookies; ALS refuses those and insists on
- * `Bearer <Starfleet id token>`. Unlike the cookie session this one carries a
+ * `Bearer <id token>`, and the membership service takes the same token under
+ * `GFNJWT` (`createHeader` in the client's MES SDK, fed by the same
+ * `IdmService.getAuthToken`). Unlike the cookie session this one carries a
  * readable `exp`, so a stale token can be recognised here instead of becoming a
- * 401 the user has to interpret. Null means "re-capture before asking ALS".
+ * 401 the user has to interpret. Null means "re-capture before asking".
  */
-export function getAlsToken(now = Date.now()): string | null {
+export function getIdToken(now = Date.now()): string | null {
   const token = active?.captured.idToken
   if (!token) return null
   const expiry = readExpiry(token)
   if (expiry !== null && now >= expiry - EXPIRY_SKEW_MS) return null
   return token
+}
+
+/**
+ * Runs a request that authenticates with the id token, re-capturing once if
+ * it is refused.
+ *
+ * The token outlives neither the login nor the launcher's own idea of it: it
+ * has its own expiry, and it can be revoked server-side with no sign here until
+ * a 401 comes back. So a missing token is topped up before asking, and a
+ * refusal buys exactly one silent re-capture and one retry. Exactly one — a
+ * headless capture boots the entire GFN web app, and a loop of them behind a
+ * button press is worse than the error it is avoiding. And only when the
+ * attempt actually carried a token: having just topped one up and come back
+ * empty, doing it again buys the same nothing at the price of a second boot.
+ *
+ * `refused` is the caller's, because "refused" differs: ALS fans out to several
+ * stores and is only refused when all of them say 401; MES is one request.
+ * Null when there is no session to ask with at all — `linked` gates the capture
+ * exactly as it does in `ensureSession`.
+ */
+export async function withIdToken<T>(
+  locale: string,
+  linked: boolean,
+  attempt: (session: GfnGraphQLConfig) => Promise<T>,
+  refused: (result: T) => boolean,
+  onRefused?: () => void
+): Promise<T | null> {
+  let session = await ensureSession(locale, linked)
+  if (!session) return null
+  if (!getIdToken()) {
+    invalidateSession()
+    session = (await ensureSession(locale, linked)) ?? session
+  }
+
+  const carried = getIdToken() !== null
+  let result = await attempt(session)
+  if (carried && refused(result)) {
+    onRefused?.()
+    invalidateSession()
+    const fresh = await ensureSession(locale, linked)
+    if (fresh) result = await attempt(fresh)
+  }
+  return result
 }
 
 /**

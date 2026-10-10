@@ -27,31 +27,8 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import type { StatusRegion, ZoneAssignment, ZoneStatus } from '@shared/types'
-
-/**
- * Resolved as a function, not a module const: `homedir()` is cheap and this is
- * testable by monkeypatching neither.
- *
- * Exported for `clientWatch.ts`, which watches this exact path, in the same
- * spirit as `streamLogPath()` — one definition, so a watch cannot end up
- * pointed somewhere the reader is not.
- */
-export function zoneStoragePath(): string {
-  return join(
-    homedir(),
-    '.var',
-    'app',
-    'com.nvidia.geforcenow',
-    '.local',
-    'state',
-    'NVIDIA',
-    'GeForceNOW',
-    'sharedstorage.json'
-  )
-}
+import { clientStoragePath } from '../gfn/clientState'
 
 /** The host every region's cloudmatch address sits under, and the suffix latency keys carry. */
 const CLOUDMATCH_SUFFIX = '.cloudmatchbeta.nvidiagrid.net'
@@ -147,7 +124,7 @@ function readLatency(network: Record<string, unknown> | null, slug: string | nul
 export async function readZoneAssignment(): Promise<ZoneAssignment> {
   let raw: string
   try {
-    raw = await readFile(zoneStoragePath(), 'utf8')
+    raw = await readFile(clientStoragePath(), 'utf8')
   } catch {
     return {
       ...UNKNOWN,
